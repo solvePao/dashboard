@@ -1,0 +1,11 @@
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+
+# Comma-separated origins allowed to call the API. Defaults to the local
+# Vite dev servers (ports 5173/5174) when unset.
+# FRONTEND_ORIGINS=http://localhost:5173,https://your-frontend.example.com
+
+# Database split: local dev uses Wrangler's local D1 (plain SQLite files under
+# backend/.wrangler/state/); production uses the remote D1 bound in
+# wrangler.toml [env.production]. Never point a dev shell at remote: use
+# `make db-schema-local` (always --local), and release with
+# `make deploy-api` (always --env production).

@@ -1,0 +1,27 @@
+name = "backend"
+main = "build/index.js"
+compatibility_date = "2026-09-29"
+
+[build]
+command = "cargo install -q \"worker-build@^0.8\" && worker-build --release"
+
+# Plain-text vars (non-secret). ENVIRONMENT tells the running Worker which
+# backend it is: "dev" locally, "production" after deploy.
+[vars]
+ENVIRONMENT = "dev"
+
+# Default (no --env flag): local dev. `wrangler dev` resolves the binding
+# below to a Miniflare-backed local D1 (plain SQLite files under
+# .wrangler/state/), so the remote D1 instance is never touched.
+[[d1_databases]]
+binding = "dashboard"
+database_name = "dashboard"
+database_id = "9f4dde3a-c017-4f06-89ac-15a6b9ea1b9b"
+
+# Production: deploy with `wrangler deploy --env production`. Inherits the D1
+# binding above, resolved against the remote Cloudflare D1 instance.
+[env.production]
+name = "backend-production"
+
+[env.production.vars]
+ENVIRONMENT = "production"
