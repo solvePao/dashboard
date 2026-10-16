@@ -1,6 +1,7 @@
 use backend::common::{
     ALLOWED_HEADERS, ALLOWED_METHODS, CORS_MAX_AGE, DB_BINDING_NAME, DEFAULT_DEVICE_NAME,
-    DEFAULT_ORIGINS, FAILED_AUTHORIZE_DELAY_SECS, SESSION_ID_HEX_LEN, SHORT_CODE_LEN, SQL_NOW,
+    DEFAULT_ORIGINS, DEVICE_BINDING_NAME, FAILED_AUTHORIZE_DELAY_SECS, PAIRING_BINDING_NAME,
+    SESSION_EXPIRY_SQL, SESSION_ID_HEX_LEN, SESSION_TTL_SECS, SHORT_CODE_LEN, SQL_NOW,
 };
 use backend::db::helper::text_or_null;
 use worker::D1Type;
@@ -17,6 +18,11 @@ fn common_constants_match_contract() {
     assert!(!SQL_NOW.is_empty());
     assert_eq!(DEFAULT_ORIGINS.len(), 4);
     assert_eq!(FAILED_AUTHORIZE_DELAY_SECS, 5);
+    assert_eq!(PAIRING_BINDING_NAME, "PAIRING_OBJECT");
+    assert_eq!(DEVICE_BINDING_NAME, "DEVICE_OBJECT");
+    // Pairing window is 2 minutes on both clocks (D1 index and object alarm).
+    assert_eq!(SESSION_TTL_SECS, 120);
+    assert!(SESSION_EXPIRY_SQL.contains("+2 minutes"));
 }
 
 #[test]

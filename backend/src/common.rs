@@ -10,12 +10,17 @@ pub const ALLOWED_HEADERS: &str = "Content-Type, Authorization";
 pub const CORS_MAX_AGE: &str = "86400";
 
 pub const DB_BINDING_NAME: &str = "dashboard";
+pub const PAIRING_BINDING_NAME: &str = "PAIRING_OBJECT";
+pub const DEVICE_BINDING_NAME: &str = "DEVICE_OBJECT";
 
 pub const USER_COLUMNS: &str =
     "id, google_sub, email, name, picture_url, created_at, updated_at, last_login_at";
 
 pub const SQL_NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
-pub const SESSION_EXPIRY_SQL: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+15 minutes')";
+pub const SESSION_EXPIRY_SQL: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+2 minutes')";
+/// Pairing session lifetime in seconds; mirrors `SESSION_EXPIRY_SQL`.
+/// The Durable Object alarm and the D1 code index share this clock.
+pub const SESSION_TTL_SECS: u64 = 120;
 pub const TOKEN_EXPIRY_SQL: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+180 days')";
 
 pub const SESSION_ID_HEX_LEN: usize = 128;

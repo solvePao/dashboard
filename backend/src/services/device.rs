@@ -1,7 +1,9 @@
 use worker::*;
 
-use super::store::{D1Stores, DeviceStore, UserStore};
+use super::pairing::{DoDeviceNotifier, DoPairingClient};
+use super::store::{D1Stores, DeviceNotifier, NoNotify, PairingClient, PairingStore};
 use super::validation as v;
+use crate::models::auth::User;
 use crate::models::device::{
     AuthorizeDeviceResponse, CheckSessionResponse, CreateSessionResponse, DeviceToken,
 };
@@ -11,21 +13,26 @@ use crate::utils;
 pub struct DeviceService;
 
 impl DeviceService {
-    /// Creates a device pairing session with QR code SVG and short code.
+    /// Creates a pairing: D1 code index + Durable Object pending state.
     pub async fn create_session(
         db: &D1Database,
+        env: &Env,
         session_id: &str,
     ) -> AppResult<CreateSessionResponse> {
-        Self::create_session_with(&D1Stores(db), session_id, utils::generate_qr_svg).await
+        let client = DoPairingClient::from_env(env)?;
+        Self::create_session_with(&D1Stores(db), &client, session_id, utils::generate_qr_svg)
+            .await
     }
 
-    pub async fn create_session_with<S, F>(
+    pub async fn create_session_with<S, C, F>(
         store: &S,
+        client: &C,
         session_id: &str,
         generate_qr: F,
     ) -> AppResult<CreateSessionResponse>
     where
-        S: DeviceStore + Sync,
+        S: PairingStore + Sync,
+        C: PairingClient + Sync,
         F: FnOnce(&str) -> std::result::Result<String, String>,
     {
         let trimmed_id = v::validate_session_id(session_id)?;
@@ -33,28 +40,49 @@ impl DeviceService {
         let qr_svg = generate_qr(&trimmed_id)
             .map_err(|err| AppError::internal(format!("Failed to generate QR: {err}")))?;
 
-        let session = store
-            .store_upsert_device_session(&trimmed_id, &short_code)
+        // A finished pairing is never reopened by re-creating it.
+        if let Some(status) = client.client_status(&trimmed_id).await? {
+            if status.status == "authorized" {
+                let row = store
+                    .store_get_pairing_code(&trimmed_id)
+                    .await?
+                    .ok_or_else(|| AppError::not_found("Session not found."))?;
+                return Ok(CreateSessionResponse {
+                    session_id: trimmed_id,
+                    short_code: v::present_short_code(&row.short_code),
+                    qr_svg,
+                    expires_at: row.expires_at,
+                });
+            }
+        }
+
+        let row = store
+            .store_upsert_pairing_code(&trimmed_id, &short_code)
             .await?;
+        let pairing = client.client_init(&trimmed_id, &row.expires_at).await?;
 
         Ok(CreateSessionResponse {
-            session_id: session.session_id,
-            short_code: v::present_short_code(&session.short_code),
+            session_id: trimmed_id,
+            short_code: v::present_short_code(&short_code),
             qr_svg,
-            expires_at: session.expires_at,
+            expires_at: pairing.expires_at,
         })
     }
 
-    /// Authorizes a pending session by pairing it with the authenticated user and creating a device token.
+    /// Authorizes a pending pairing for the authenticated user.
+    /// The object referees the transition; D1 only persists the token.
     pub async fn authorize_device(
         db: &D1Database,
-        user_id: i64,
+        env: &Env,
+        user: &User,
         code_or_session: &str,
         device_name: Option<&str>,
     ) -> AppResult<AuthorizeDeviceResponse> {
+        let client = DoPairingClient::from_env(env)?;
         Self::authorize_device_with(
             &D1Stores(db),
-            user_id,
+            &client,
+            user,
             code_or_session,
             device_name,
             utils::generate_secure_token,
@@ -62,95 +90,95 @@ impl DeviceService {
         .await
     }
 
-    pub async fn authorize_device_with<S, F>(
+    pub async fn authorize_device_with<S, C, F>(
         store: &S,
-        user_id: i64,
+        client: &C,
+        user: &User,
         code_or_session: &str,
         device_name: Option<&str>,
         generate_token: F,
     ) -> AppResult<AuthorizeDeviceResponse>
     where
-        S: DeviceStore + Sync,
+        S: PairingStore + Sync,
+        C: PairingClient + Sync,
         F: FnOnce() -> std::result::Result<String, String>,
     {
         let trimmed_code = v::normalize_code_or_session(code_or_session)?;
 
-        let pending = store.store_find_pending_session(&trimmed_code).await?;
-        let session = match pending {
-            Some(s) => s,
-            None => {
-                // Distinguish already-authorized (409) from unknown/expired
-                // (404) so a second scanner gets an honest conflict rather
-                // than a misleading not-found.
-                if let Ok(Some(existing)) =
-                    store.store_find_session_for_authorize(&trimmed_code).await
-                {
-                    if existing.status == "authorized" {
-                        return Err(AppError::new(
-                            "Session was already authorized.",
-                            409,
-                        ));
-                    }
+        let session_id = if utils::is_valid_128_hex(&trimmed_code) {
+            trimmed_code.clone()
+        } else {
+            match store.store_find_session_by_code(&trimmed_code).await? {
+                Some(row) => row.session_id,
+                None => {
+                    return Err(AppError::not_found(
+                        "Pending session not found or expired.",
+                    ))
                 }
-                return Err(AppError::not_found("Pending session not found or expired."));
             }
         };
 
-        let device_token = generate_token().map_err(AppError::internal)?;
-
-        let name = v::normalize_device_name(device_name);
-
-        let authorized = store
-            .store_authorize_device_session(&session.session_id, user_id, &device_token, &name)
-            .await?;
-        if !authorized {
-            return Err(AppError::new(
-                "Session was already authorized or expired.",
-                409,
-            ));
-        }
-
-        Ok(AuthorizeDeviceResponse {
-            status: "authorized".to_string(),
-            session_id: session.session_id,
-            device_name: name,
-            message: "Device successfully authorized.".to_string(),
-        })
-    }
-
-    /// Checks the status of a device session (polling).
-    /// If authorized, returns the device token and user. If expired, returns status 'expired'.
-    pub async fn check_session(db: &D1Database, session_id: &str) -> AppResult<CheckSessionResponse> {
-        Self::check_session_with(&D1Stores(db), session_id).await
-    }
-
-    pub async fn check_session_with<S>(store: &S, session_id: &str) -> AppResult<CheckSessionResponse>
-    where
-        S: DeviceStore + UserStore + Sync,
-    {
-        let trimmed_id = v::normalize_session_lookup(session_id)?;
-
-        let session = store
-            .store_get_device_session(&trimmed_id)
+        // Optimisation only — not the race guard. A concurrent authorizer can pass
+        // this check and still lose at client_commit below. The Durable Object is the
+        // serialization point; this pre-check just avoids a needless token mint.
+        let status = client
+            .client_status(&session_id)
             .await?
-            .ok_or_else(|| AppError::not_found("Session not found."))?;
-
-        if session.status == "authorized" {
-            if let (Some(token), Some(user_id)) = (session.device_token, session.user_id) {
-                let user = store.store_get_user_by_id(user_id).await.unwrap_or(None);
-                return Ok(CheckSessionResponse {
-                    status: "authorized".to_string(),
-                    token: Some(token),
-                    user,
-                });
+            .ok_or_else(|| AppError::not_found("Pending session not found or expired."))?;
+        match status.status.as_str() {
+            "authorized" => {
+                return Err(AppError::new("Session was already authorized.", 409));
+            }
+            "pending" => {}
+            _ => {
+                return Err(AppError::not_found(
+                    "Pending session not found or expired.",
+                ));
             }
         }
 
-        Ok(CheckSessionResponse {
-            status: session.status,
-            token: None,
-            user: None,
-        })
+        let device_token = generate_token().map_err(AppError::internal)?;
+        let name = v::normalize_device_name(device_name);
+
+        store
+            .store_insert_device_token(user.id, &device_token, &name)
+            .await?;
+
+        // The Durable Object serializes concurrent commits. Ok(false) means another
+        // authorizer already committed (409 race); compensate by deleting the token.
+        match client.client_commit(&session_id, &device_token, user).await {
+            Ok(true) => Ok(AuthorizeDeviceResponse {
+                status: "authorized".to_string(),
+                session_id,
+                device_name: name,
+                message: "Device successfully authorized.".to_string(),
+            }),
+            Ok(false) => {
+                let _ = store.store_delete_device_token(&device_token).await;
+                Err(AppError::new("Session was already authorized.", 409))
+            }
+            Err(err) => {
+                let _ = store.store_delete_device_token(&device_token).await;
+                Err(err)
+            }
+        }
+    }
+
+    /// Fallback status read; the Durable Object is the source.
+    pub async fn check_session(env: &Env, session_id: &str) -> AppResult<CheckSessionResponse> {
+        let client = DoPairingClient::from_env(env)?;
+        Self::check_session_with(&client, session_id).await
+    }
+
+    pub async fn check_session_with<C>(client: &C, session_id: &str) -> AppResult<CheckSessionResponse>
+    where
+        C: PairingClient + Sync,
+    {
+        let trimmed_id = v::normalize_session_lookup(session_id)?;
+        client
+            .client_status(&trimmed_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("Session not found."))
     }
 
     /// Lists active device tokens for the user.
@@ -158,25 +186,42 @@ impl DeviceService {
         Self::get_user_devices_with(&D1Stores(db), user_id).await
     }
 
-    pub async fn get_user_devices_with<S>(
-        store: &S,
-        user_id: i64,
-    ) -> AppResult<Vec<DeviceToken>>
+    pub async fn get_user_devices_with<S>(store: &S, user_id: i64) -> AppResult<Vec<DeviceToken>>
     where
-        S: DeviceStore + Sync,
+        S: PairingStore + Sync,
     {
         store.store_get_user_devices(user_id).await
     }
 
-    /// Revokes a device token for the user.
-    pub async fn revoke_device(db: &D1Database, user_id: i64, token: &str) -> AppResult<bool> {
-        Self::revoke_device_with(&D1Stores(db), user_id, token).await
+    /// Revokes a device token for the user and pushes the revocation to
+    /// any live device socket. The push is best-effort: a dead object
+    /// never fails the revocation itself.
+    pub async fn revoke_device(
+        db: &D1Database,
+        env: &Env,
+        user_id: i64,
+        token: &str,
+    ) -> AppResult<bool> {
+        match DoDeviceNotifier::from_env(env) {
+            Ok(notifier) => Self::revoke_device_with(&D1Stores(db), &notifier, user_id, token).await,
+            Err(_) => Self::revoke_device_with(&D1Stores(db), &NoNotify, user_id, token).await,
+        }
     }
 
-    pub async fn revoke_device_with<S>(store: &S, user_id: i64, token: &str) -> AppResult<bool>
+    pub async fn revoke_device_with<S, N>(
+        store: &S,
+        notifier: &N,
+        user_id: i64,
+        token: &str,
+    ) -> AppResult<bool>
     where
-        S: DeviceStore + Sync,
+        S: PairingStore + Sync,
+        N: DeviceNotifier + Sync,
     {
-        store.store_revoke_device_token(user_id, token).await
+        let revoked = store.store_revoke_device_token(user_id, token).await?;
+        if revoked {
+            notifier.notify_revoked(token).await;
+        }
+        Ok(revoked)
     }
 }

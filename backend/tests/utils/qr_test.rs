@@ -22,6 +22,12 @@ fn qr_svg_works_for_128_hex_session() {
 }
 
 #[test]
+fn qr_svg_rejects_oversized_input() {
+    // Beyond QR capacity the builder fails instead of truncating.
+    assert!(generate_qr_svg(&"x".repeat(5000)).is_err());
+}
+
+#[test]
 fn qr_svg_empty_does_not_panic() {
     // fast_qr encodes empty input; the service never sends empty (validated upstream).
     let res = generate_qr_svg("");

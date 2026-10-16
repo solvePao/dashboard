@@ -51,7 +51,7 @@ defineProps<{
           4
         </span>
         <span class="text-foreground/90">
-          Click the <strong class="font-semibold text-foreground">Check for Auth</strong> button below.
+          Keep this page open — it signs in on its own once authorized. The round button below re-checks manually.
         </span>
       </li>
     </ol>

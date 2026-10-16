@@ -41,6 +41,13 @@ pub fn request_origin(req: &Request) -> Option<String> {
     req.headers().get("Origin").unwrap_or(None)
 }
 
+/// True for a WebSocket upgrade response. Upgrades bypass CORS
+/// mutation: the handshake is not subject to CORS and its headers may
+/// be immutable (mutating them throws at runtime).
+pub fn is_websocket_upgrade(status_code: u16) -> bool {
+    status_code == 101
+}
+
 pub fn apply_cors(origin: Option<&str>, allowed: &[String], mut res: Response) -> Result<Response> {
     if is_origin_allowed(origin, allowed) {
         if let Some(origin) = origin {

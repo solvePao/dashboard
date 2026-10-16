@@ -1,8 +1,8 @@
 use backend::models::auth::{GoogleAuthRequest, TokenInfo, User, UserResponse};
 use backend::models::device::{
     AuthorizeDeviceRequest, AuthorizeDeviceResponse, CheckSessionRequest, CheckSessionResponse,
-    CreateSessionRequest, CreateSessionResponse, DeviceSession, DeviceToken, DevicesResponse,
-    RevokeResponse,
+    CreateSessionRequest, CreateSessionResponse, DeviceToken, DevicesResponse, PairingCode,
+    PairingCommitRequest, PairingInitRequest, PairingState, RevokeResponse,
 };
 use backend::models::error::AppError;
 
@@ -88,19 +88,35 @@ fn device_dtos_serde() {
     };
     assert!(serde_json::to_string(&resp).unwrap().contains("authorized"));
 
-    let session = DeviceSession {
+    let code = PairingCode {
         session_id: "s".to_string(),
         short_code: "abc123".to_string(),
-        status: "pending".to_string(),
-        user_id: None,
-        device_token: None,
-        created_at: "c".to_string(),
         expires_at: "e".to_string(),
-        updated_at: "u".to_string(),
     };
-    let s = serde_json::to_string(&session).unwrap();
-    let back: DeviceSession = serde_json::from_str(&s).unwrap();
+    let s = serde_json::to_string(&code).unwrap();
+    let back: PairingCode = serde_json::from_str(&s).unwrap();
+    assert_eq!(back.short_code, "abc123");
+
+    let init = PairingInitRequest { expires_at: "e".to_string() };
+    let s = serde_json::to_string(&init).unwrap();
+    let back: PairingInitRequest = serde_json::from_str(&s).unwrap();
+    assert_eq!(back.expires_at, "e");
+
+    let commit = PairingCommitRequest { token: "t".to_string(), user: sample_user() };
+    let s = serde_json::to_string(&commit).unwrap();
+    let back: PairingCommitRequest = serde_json::from_str(&s).unwrap();
+    assert_eq!(back.token, "t");
+
+    let state = PairingState {
+        status: "pending".to_string(),
+        expires_at: "e".to_string(),
+        token: None,
+        user: None,
+    };
+    let s = serde_json::to_string(&state).unwrap();
+    let back: PairingState = serde_json::from_str(&s).unwrap();
     assert_eq!(back.status, "pending");
+    assert!(!s.contains("token"));
 
     let tok = DeviceToken {
         token: "t".to_string(),
@@ -132,4 +148,14 @@ fn device_dtos_serde() {
 
     let rev = RevokeResponse { revoked: true };
     assert!(serde_json::to_string(&rev).unwrap().contains("true"));
+}
+
+#[test]
+fn check_session_response_roundtrips_from_object() {
+    let r: CheckSessionResponse = serde_json::from_value(serde_json::json!({
+        "status": "authorized", "token": "tok", "user": null
+    }))
+    .unwrap();
+    assert_eq!(r.status, "authorized");
+    assert_eq!(r.token.as_deref(), Some("tok"));
 }

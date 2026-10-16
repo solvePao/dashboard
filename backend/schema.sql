@@ -15,20 +15,17 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
 
--- Device pairing sessions (temporary handshake, 15 min expiration)
-CREATE TABLE IF NOT EXISTS device_sessions (
+-- Pairing code index (pointer only, 2 min expiration). Pairing state
+-- itself lives in the PairingObject Durable Object; this table only
+-- translates the 6-char code typed on the web into a session_id.
+CREATE TABLE IF NOT EXISTS pairing_codes (
   session_id TEXT PRIMARY KEY,
   short_code TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'authorized', 'expired'
-  user_id INTEGER REFERENCES users(id),
-  device_token TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-  expires_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  expires_at TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_device_sessions_short_code ON device_sessions (short_code);
-CREATE INDEX IF NOT EXISTS idx_device_sessions_status ON device_sessions (status);
+CREATE INDEX IF NOT EXISTS idx_pairing_codes_short_code ON pairing_codes (short_code);
 
 -- Long-lived device tokens for mobile clients (6 months validity)
 CREATE TABLE IF NOT EXISTS device_tokens (

@@ -5,7 +5,10 @@ import {
   createDeviceSessionApi,
   checkDeviceAuthApi,
   fetchMeApi,
+  pairingSocketUrl,
+  deviceSocketUrl,
 } from "../api/deviceAuthApi";
+import type { CheckAuthResponse } from "../types/auth";
 import { generate128Hex } from "../services/crypto";
 import {
   getStoredDeviceToken,
@@ -24,6 +27,14 @@ const user = ref<UserProfile | null>(null);
 const authState = ref<AuthState>("idle");
 const statusMessage = ref<string>("");
 
+let pairingSocket: WebSocket | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+let reconnectAttempts = 0;
+
+let deviceSocket: WebSocket | null = null;
+let deviceReconnectTimer: ReturnType<typeof setTimeout> | undefined;
+let deviceReconnectAttempts = 0;
+
 /** Fallback display pairing code when the backend omits short_code. */
 export function deriveShortCode(id: string): string {
   return id ? id.slice(0, 6).toUpperCase() : "";
@@ -40,6 +51,122 @@ export function shouldClearStoredToken(err: unknown): boolean {
 export function useDeviceAuth() {
   const isAuthenticated = computed(() => authState.value === "authorized" && !!user.value);
 
+  function closePairingSocket(): void {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+    }
+    reconnectAttempts = 0;
+    if (pairingSocket) {
+      pairingSocket.onclose = null;
+      pairingSocket.close();
+      pairingSocket = null;
+    }
+  }
+
+  function closeDeviceSocket(): void {
+    if (deviceReconnectTimer) {
+      clearTimeout(deviceReconnectTimer);
+      deviceReconnectTimer = undefined;
+    }
+    deviceReconnectAttempts = 0;
+    if (deviceSocket) {
+      deviceSocket.onclose = null;
+      deviceSocket.close();
+      deviceSocket = null;
+    }
+  }
+
+  function connectDeviceSocket(token: string): void {
+    if (!token || authState.value !== "authorized") return;
+    if (deviceSocket && deviceSocket.readyState <= WebSocket.OPEN) return;
+
+    const ws = new WebSocket(deviceSocketUrl(token));
+    deviceSocket = ws;
+
+    ws.onopen = () => {
+      deviceReconnectAttempts = 0;
+    };
+    ws.onmessage = async (event) => {
+      try {
+        const body = JSON.parse(String(event.data)) as { status?: string; message?: string };
+        if (body.status === "revoked") {
+          logger.warn("auth", "Device revoked by web dashboard");
+          closeDeviceSocket();
+          removeStoredDeviceToken();
+          user.value = null;
+          await createSession();
+          statusMessage.value =
+            "Device access was revoked from the web dashboard. Scan QR code to reconnect.";
+        }
+      } catch {
+        logger.warn("auth", "Ignored malformed device socket message");
+      }
+    };
+    ws.onclose = () => {
+      if (deviceSocket === ws) deviceSocket = null;
+      if (authState.value === "authorized" && getStoredDeviceToken() === token) {
+        const delay = Math.min(1000 * 2 ** deviceReconnectAttempts, 5000);
+        deviceReconnectAttempts += 1;
+        deviceReconnectTimer = setTimeout(() => connectDeviceSocket(token), delay);
+      }
+    };
+    ws.onerror = () => ws.close();
+  }
+
+  function applyAuthorized(body: CheckAuthResponse): boolean {
+    if (body.status !== "authorized" || !body.token || !body.user) return false;
+    user.value = body.user;
+    setStoredDeviceToken(body.token);
+    authState.value = "authorized";
+    statusMessage.value = "Successfully authorized!";
+    logger.info("auth", "Device authorized successfully", { userId: body.user.id });
+    closePairingSocket();
+    connectDeviceSocket(body.token);
+    return true;
+  }
+
+  function applyExpired(): void {
+    authState.value = "expired";
+    statusMessage.value = "Session has expired. Please regenerate a new QR code.";
+    closePairingSocket();
+  }
+
+  function connectPairingSocket(): void {
+    if (!sessionId.value || authState.value === "authorized") return;
+    if (pairingSocket && pairingSocket.readyState <= WebSocket.OPEN) return;
+
+    const ws = new WebSocket(pairingSocketUrl(sessionId.value));
+    pairingSocket = ws;
+
+    ws.onopen = () => {
+      reconnectAttempts = 0;
+    };
+    ws.onmessage = (event) => {
+      try {
+        const body = JSON.parse(String(event.data)) as CheckAuthResponse;
+        if (applyAuthorized(body)) return;
+        if (body.status === "expired") applyExpired();
+      } catch {
+        logger.warn("auth", "Ignored malformed pairing message");
+      }
+    };
+    ws.onclose = () => {
+      if (pairingSocket === ws) pairingSocket = null;
+      // Reconnect while the 2-minute pairing window is still open;
+      // the object replays a finished result on reconnect.
+      if (
+        sessionId.value &&
+        (authState.value === "pending" || authState.value === "checking")
+      ) {
+        const delay = Math.min(1000 * 2 ** reconnectAttempts, 5000);
+        reconnectAttempts += 1;
+        reconnectTimer = setTimeout(connectPairingSocket, delay);
+      }
+    };
+    ws.onerror = () => ws.close();
+  }
+
   async function restoreExistingToken(): Promise<boolean> {
     try {
       const stored = getStoredDeviceToken();
@@ -53,6 +180,7 @@ export function useDeviceAuth() {
       authState.value = "authorized";
       statusMessage.value = "Device is connected and authenticated";
       logger.info("auth", "Restored session with device token", { userId: body.user.id });
+      connectDeviceSocket(stored);
       return true;
     } catch (err) {
       if (shouldClearStoredToken(err)) {
@@ -70,6 +198,8 @@ export function useDeviceAuth() {
   }
 
   async function createSession(): Promise<void> {
+    closePairingSocket();
+    closeDeviceSocket();
     try {
       authState.value = "loading";
       statusMessage.value = "Generating session ID...";
@@ -89,6 +219,7 @@ export function useDeviceAuth() {
       expiresAt.value = body.expires_at;
       authState.value = "pending";
       statusMessage.value = "Scan QR code or enter pairing code on the web dashboard.";
+      connectPairingSocket();
       logger.info("auth", "Device pairing session created", {
         sessionId: body.session_id.slice(0, 8),
         shortCode: shortCode.value,
@@ -134,19 +265,14 @@ export function useDeviceAuth() {
     try {
       const body = await checkDeviceAuthApi(sessionId.value);
 
-      if (body.status === "authorized" && body.token && body.user) {
-        user.value = body.user;
-        setStoredDeviceToken(body.token);
-        authState.value = "authorized";
-        statusMessage.value = "Successfully authorized!";
-        logger.info("auth", "Device authorized successfully", { userId: body.user.id });
-      } else if (body.status === "expired") {
-        authState.value = "expired";
-        statusMessage.value = "Session has expired. Please regenerate a new QR code.";
+      if (applyAuthorized(body)) return;
+      if (body.status === "expired") {
+        applyExpired();
       } else {
         authState.value = "pending";
         statusMessage.value =
-          "Device not authorized yet. Scan QR code or enter the 6-character code on the web dashboard, then click Check for Auth.";
+          "Device not authorized yet. Scan QR code or enter the 6-character code on the web dashboard — this page updates on its own once authorized.";
+        connectPairingSocket();
       }
     } catch (err) {
       authState.value = "pending";
@@ -158,6 +284,7 @@ export function useDeviceAuth() {
 
   async function disconnect(): Promise<void> {
     try {
+      closeDeviceSocket();
       removeStoredDeviceToken();
       user.value = null;
       authState.value = "idle";

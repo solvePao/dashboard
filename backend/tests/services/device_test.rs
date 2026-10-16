@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use backend::models::auth::User;
-use backend::models::device::{DeviceSession, DeviceToken};
+use backend::models::device::{CheckSessionResponse, DeviceToken, PairingCode, PairingState};
 use backend::models::error::{AppError, AppResult};
 use backend::services::device::DeviceService;
-use backend::services::store::{DeviceStore, UserStore};
+use backend::services::store::{DeviceNotifier, NoNotify, PairingClient, PairingStore};
 
 fn sample_user(id: i64) -> User {
     User {
@@ -14,39 +14,44 @@ fn sample_user(id: i64) -> User {
         email: format!("u{id}@x.com"),
         name: Some("Test".to_string()),
         picture_url: None,
-        created_at: "2026-01-01T00:00:00.000Z".to_string(),
-        updated_at: "2026-01-01T00:00:00.000Z".to_string(),
+        created_at: "c".to_string(),
+        updated_at: "u".to_string(),
         last_login_at: None,
     }
 }
 
-fn sample_session(id: &str, status: &str) -> DeviceSession {
-    DeviceSession {
-        session_id: id.to_string(),
-        short_code: id[..6.min(id.len())].to_lowercase(),
-        status: status.to_string(),
-        user_id: None,
-        device_token: None,
-        created_at: "c".to_string(),
-        expires_at: "e".to_string(),
-        updated_at: "u".to_string(),
+fn pending_state(expires: &str) -> PairingState {
+    PairingState {
+        status: "pending".to_string(),
+        expires_at: expires.to_string(),
+        token: None,
+        user: None,
     }
 }
 
-struct FakeStore {
-    sessions: Mutex<HashMap<String, DeviceSession>>,
-    users: Mutex<HashMap<i64, User>>,
-    tokens: Mutex<Vec<DeviceToken>>,
-    fail_with: Mutex<Option<String>>,
+fn as_check(state: &PairingState) -> CheckSessionResponse {
+    let authorized = state.status == "authorized";
+    CheckSessionResponse {
+        status: state.status.clone(),
+        token: if authorized { state.token.clone() } else { None },
+        user: if authorized { state.user.clone() } else { None },
+    }
 }
 
-impl FakeStore {
+struct FakePairingStore {
+    codes: Mutex<HashMap<String, PairingCode>>,
+    tokens: Mutex<Vec<DeviceToken>>,
+    fail_with: Mutex<Option<String>>,
+    fail_insert: Mutex<bool>,
+}
+
+impl FakePairingStore {
     fn new() -> Self {
         Self {
-            sessions: Mutex::new(HashMap::new()),
-            users: Mutex::new(HashMap::new()),
+            codes: Mutex::new(HashMap::new()),
             tokens: Mutex::new(Vec::new()),
             fail_with: Mutex::new(None),
+            fail_insert: Mutex::new(false),
         }
     }
     fn fail_next(&self, msg: &str) {
@@ -61,142 +66,54 @@ impl FakeStore {
     }
 }
 
-impl UserStore for FakeStore {
-    async fn store_get_user_by_sub(&self, sub: &str) -> AppResult<Option<User>> {
-        if let Some(e) = self.take_fail() {
-            return Err(e);
-        }
-        Ok(self
-            .users
-            .lock()
-            .unwrap()
-            .values()
-            .find(|u| u.google_sub == sub)
-            .cloned())
-    }
-    async fn store_get_user_by_id(&self, id: i64) -> AppResult<Option<User>> {
-        if let Some(e) = self.take_fail() {
-            return Err(e);
-        }
-        Ok(self.users.lock().unwrap().get(&id).cloned())
-    }
-    async fn store_get_user_by_device_token(&self, token: &str) -> AppResult<Option<User>> {
-        if let Some(e) = self.take_fail() {
-            return Err(e);
-        }
-        let _ = token;
-        Ok(None)
-    }
-    async fn store_upsert_user(
-        &self,
-        sub: &str,
-        email: &str,
-        name: Option<&str>,
-        picture_url: Option<&str>,
-    ) -> AppResult<User> {
-        if let Some(e) = self.take_fail() {
-            return Err(e);
-        }
-        let u = User {
-            id: 1,
-            google_sub: sub.to_string(),
-            email: email.to_string(),
-            name: name.map(str::to_string),
-            picture_url: picture_url.map(str::to_string),
-            created_at: "c".to_string(),
-            updated_at: "u".to_string(),
-            last_login_at: None,
-        };
-        self.users.lock().unwrap().insert(1, u.clone());
-        Ok(u)
-    }
-}
-
-impl DeviceStore for FakeStore {
-    async fn store_upsert_device_session(
+impl PairingStore for FakePairingStore {
+    async fn store_upsert_pairing_code(
         &self,
         session_id: &str,
         short_code: &str,
-    ) -> AppResult<DeviceSession> {
+    ) -> AppResult<PairingCode> {
         if let Some(e) = self.take_fail() {
             return Err(e);
         }
-        let s = DeviceSession {
+        let row = PairingCode {
             session_id: session_id.to_string(),
             short_code: short_code.to_string(),
-            status: "pending".to_string(),
-            user_id: None,
-            device_token: None,
-            created_at: "c".to_string(),
             expires_at: "2099-01-01T00:00:00.000Z".to_string(),
-            updated_at: "u".to_string(),
         };
-        self.sessions.lock().unwrap().insert(session_id.to_string(), s.clone());
-        Ok(s)
+        self.codes.lock().unwrap().insert(session_id.to_string(), row.clone());
+        Ok(row)
     }
-    async fn store_get_device_session(&self, session_id: &str) -> AppResult<Option<DeviceSession>> {
+    async fn store_find_session_by_code(&self, code: &str) -> AppResult<Option<PairingCode>> {
         if let Some(e) = self.take_fail() {
             return Err(e);
         }
-        Ok(self.sessions.lock().unwrap().get(session_id).cloned())
-    }
-    async fn store_find_pending_session(
-        &self,
-        code_or_session_id: &str,
-    ) -> AppResult<Option<DeviceSession>> {
-        if let Some(e) = self.take_fail() {
-            return Err(e);
-        }
-        let lower = code_or_session_id.to_lowercase();
+        let lower = code.to_lowercase();
         Ok(self
-            .sessions
+            .codes
             .lock()
             .unwrap()
             .values()
-            .find(|s| {
-                s.status == "pending"
-                    && (s.session_id == code_or_session_id
-                        || s.short_code.to_lowercase() == lower)
-            })
+            .find(|c| c.short_code.to_lowercase() == lower)
             .cloned())
     }
-    async fn store_find_session_for_authorize(
-        &self,
-        code_or_session_id: &str,
-    ) -> AppResult<Option<DeviceSession>> {
+    async fn store_get_pairing_code(&self, session_id: &str) -> AppResult<Option<PairingCode>> {
         if let Some(e) = self.take_fail() {
             return Err(e);
         }
-        let lower = code_or_session_id.to_lowercase();
-        Ok(self
-            .sessions
-            .lock()
-            .unwrap()
-            .values()
-            .find(|s| {
-                s.session_id == code_or_session_id || s.short_code.to_lowercase() == lower
-            })
-            .cloned())
+        Ok(self.codes.lock().unwrap().get(session_id).cloned())
     }
-    async fn store_authorize_device_session(
+    async fn store_insert_device_token(
         &self,
-        session_id: &str,
         user_id: i64,
         device_token: &str,
         device_name: &str,
-    ) -> AppResult<bool> {
+    ) -> AppResult<()> {
         if let Some(e) = self.take_fail() {
             return Err(e);
         }
-        let mut sessions = self.sessions.lock().unwrap();
-        let s = sessions.get_mut(session_id).expect("session must exist");
-        // Mirror production guard: only pending sessions transition.
-        if s.status != "pending" {
-            return Ok(false);
+        if *self.fail_insert.lock().unwrap() {
+            return Err(AppError::bad_gateway("insert down"));
         }
-        s.status = "authorized".to_string();
-        s.user_id = Some(user_id);
-        s.device_token = Some(device_token.to_string());
         self.tokens.lock().unwrap().push(DeviceToken {
             token: device_token.to_string(),
             user_id,
@@ -205,7 +122,14 @@ impl DeviceStore for FakeStore {
             expires_at: "e".to_string(),
             last_used_at: None,
         });
-        Ok(true)
+        Ok(())
+    }
+    async fn store_delete_device_token(&self, device_token: &str) -> AppResult<()> {
+        if let Some(e) = self.take_fail() {
+            return Err(e);
+        }
+        self.tokens.lock().unwrap().retain(|t| t.token != device_token);
+        Ok(())
     }
     async fn store_get_user_devices(&self, user_id: i64) -> AppResult<Vec<DeviceToken>> {
         if let Some(e) = self.take_fail() {
@@ -231,26 +155,136 @@ impl DeviceStore for FakeStore {
     }
 }
 
+struct FakePairingClient {
+    states: Mutex<HashMap<String, PairingState>>,
+    fail_with: Mutex<Option<String>>,
+    refuse_commit: Mutex<bool>,
+    fail_commit: Mutex<bool>,
+}
+
+impl FakePairingClient {
+    fn new() -> Self {
+        Self {
+            states: Mutex::new(HashMap::new()),
+            fail_with: Mutex::new(None),
+            refuse_commit: Mutex::new(false),
+            fail_commit: Mutex::new(false),
+        }
+    }
+    fn fail_next(&self, msg: &str) {
+        *self.fail_with.lock().unwrap() = Some(msg.to_string());
+    }
+    fn take_fail(&self) -> Option<AppError> {
+        self.fail_with
+            .lock()
+            .unwrap()
+            .take()
+            .map(AppError::bad_gateway)
+    }
+    fn seed(&self, session_id: &str, state: PairingState) {
+        self.states.lock().unwrap().insert(session_id.to_string(), state);
+    }
+}
+
+impl PairingClient for FakePairingClient {
+    async fn client_init(&self, session_id: &str, expires_at: &str) -> AppResult<PairingState> {
+        if let Some(e) = self.take_fail() {
+            return Err(e);
+        }
+        let mut states = self.states.lock().unwrap();
+        if let Some(existing) = states.get(session_id) {
+            if existing.status == "authorized" {
+                return Ok(existing.clone());
+            }
+        }
+        let state = pending_state(expires_at);
+        states.insert(session_id.to_string(), state.clone());
+        Ok(state)
+    }
+    async fn client_status(&self, session_id: &str) -> AppResult<Option<CheckSessionResponse>> {
+        if let Some(e) = self.take_fail() {
+            return Err(e);
+        }
+        Ok(self.states.lock().unwrap().get(session_id).map(as_check))
+    }
+    async fn client_commit(
+        &self,
+        session_id: &str,
+        device_token: &str,
+        user: &User,
+    ) -> AppResult<bool> {
+        if *self.fail_commit.lock().unwrap() {
+            return Err(AppError::bad_gateway("commit down"));
+        }
+        if *self.refuse_commit.lock().unwrap() {
+            return Ok(false);
+        }
+        let current = self.states.lock().unwrap().get(session_id).cloned();
+        match current {
+            None => Err(AppError::not_found("Pending session not found or expired.")),
+            Some(s) if s.status == "authorized" => Ok(false),
+            Some(s) if s.status != "pending" => {
+                Err(AppError::not_found("Pending session not found or expired."))
+            }
+            Some(s) => {
+                self.states.lock().unwrap().insert(
+                    session_id.to_string(),
+                    PairingState {
+                        status: "authorized".to_string(),
+                        expires_at: s.expires_at,
+                        token: Some(device_token.to_string()),
+                        user: Some(user.clone()),
+                    },
+                );
+                Ok(true)
+            }
+        }
+    }
+}
+
+struct FakeNotifier {
+    calls: Mutex<Vec<String>>,
+}
+
+impl FakeNotifier {
+    fn new() -> Self {
+        Self { calls: Mutex::new(Vec::new()) }
+    }
+}
+
+impl DeviceNotifier for FakeNotifier {
+    async fn notify_revoked(&self, device_token: &str) {
+        self.calls.lock().unwrap().push(device_token.to_string());
+    }
+}
+
 fn valid_session_id() -> String {
     "ab".repeat(64)
 }
 
+fn harness() -> (FakePairingStore, FakePairingClient) {
+    (FakePairingStore::new(), FakePairingClient::new())
+}
+
 #[tokio::test]
 async fn create_session_ok_uppercases_shortcode() {
-    let store = FakeStore::new();
+    let (store, client) = harness();
     let sid = valid_session_id();
-    let res = DeviceService::create_session_with(&store, &sid, |_| Ok("<svg/>".to_string()))
-        .await
-        .unwrap();
+    let res = DeviceService::create_session_with(&store, &client, &sid, |_| {
+        Ok("<svg/>".to_string())
+    })
+    .await
+    .unwrap();
     assert_eq!(res.session_id, sid);
     assert_eq!(res.short_code, sid[..6].to_uppercase());
     assert_eq!(res.qr_svg, "<svg/>");
+    assert!(!res.expires_at.is_empty());
 }
 
 #[tokio::test]
 async fn create_session_rejects_invalid() {
-    let store = FakeStore::new();
-    let err = DeviceService::create_session_with(&store, "bad", |_| Ok(String::new()))
+    let (store, client) = harness();
+    let err = DeviceService::create_session_with(&store, &client, "bad", |_| Ok(String::new()))
         .await
         .unwrap_err();
     assert_eq!(err.status, 400);
@@ -258,8 +292,8 @@ async fn create_session_rejects_invalid() {
 
 #[tokio::test]
 async fn create_session_qr_failure_maps_500() {
-    let store = FakeStore::new();
-    let err = DeviceService::create_session_with(&store, &valid_session_id(), |_| {
+    let (store, client) = harness();
+    let err = DeviceService::create_session_with(&store, &client, &valid_session_id(), |_| {
         Err("qr boom".to_string())
     })
     .await
@@ -269,9 +303,9 @@ async fn create_session_qr_failure_maps_500() {
 
 #[tokio::test]
 async fn create_session_db_failure_propagates() {
-    let store = FakeStore::new();
+    let (store, client) = harness();
     store.fail_next("db down");
-    let err = DeviceService::create_session_with(&store, &valid_session_id(), |_| {
+    let err = DeviceService::create_session_with(&store, &client, &valid_session_id(), |_| {
         Ok("<svg/>".to_string())
     })
     .await
@@ -280,20 +314,54 @@ async fn create_session_db_failure_propagates() {
 }
 
 #[tokio::test]
-async fn authorize_ok_with_defaults_and_custom_name() {
-    let store = FakeStore::new();
+async fn create_session_client_failure_propagates() {
+    let (store, client) = harness();
+    client.fail_next("do down");
+    let err = DeviceService::create_session_with(&store, &client, &valid_session_id(), |_| {
+        Ok("<svg/>".to_string())
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(err.status, 502);
+}
+
+#[tokio::test]
+async fn create_session_never_reopens_authorized() {
+    let (store, client) = harness();
     let sid = valid_session_id();
-    DeviceService::create_session_with(&store, &sid, |_| Ok("<svg/>".to_string()))
+    DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
         .await
         .unwrap();
+    let user = sample_user(42);
+    DeviceService::authorize_device_with(&store, &client, &user, &sid, None, || {
+        Ok("tok-first".to_string())
+    })
+    .await
+    .unwrap();
+    // Re-creating a finished pairing returns it instead of resetting it.
+    let again = DeviceService::create_session_with(&store, &client, &sid, |_| {
+        Ok("<svg/>".to_string())
+    })
+    .await
+    .unwrap();
+    assert_eq!(again.session_id, sid);
+    let status = DeviceService::check_session_with(&client, &sid).await.unwrap();
+    assert_eq!(status.status, "authorized");
+    assert_eq!(status.token.as_deref(), Some("tok-first"));
+}
 
-    let res = DeviceService::authorize_device_with(
-        &store,
-        42,
-        &sid,
-        None,
-        || Ok("tok123".to_string()),
-    )
+#[tokio::test]
+async fn authorize_ok_with_defaults_and_custom_name() {
+    let (store, client) = harness();
+    let sid = valid_session_id();
+    DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
+        .await
+        .unwrap();
+    let user = sample_user(42);
+
+    let res = DeviceService::authorize_device_with(&store, &client, &user, &sid, None, || {
+        Ok("tok123".to_string())
+    })
     .await
     .unwrap();
     assert_eq!(res.status, "authorized");
@@ -301,12 +369,14 @@ async fn authorize_ok_with_defaults_and_custom_name() {
 
     // Second session with custom name and short-code lookup.
     let sid2 = "cd".repeat(64);
-    let created = DeviceService::create_session_with(&store, &sid2, |_| Ok("<svg/>".to_string()))
-        .await
-        .unwrap();
+    let created =
+        DeviceService::create_session_with(&store, &client, &sid2, |_| Ok("<svg/>".to_string()))
+            .await
+            .unwrap();
     let res2 = DeviceService::authorize_device_with(
         &store,
-        42,
+        &client,
+        &user,
         &created.short_code,
         Some("  Pixel  "),
         || Ok("tok2".to_string()),
@@ -318,118 +388,273 @@ async fn authorize_ok_with_defaults_and_custom_name() {
 
 #[tokio::test]
 async fn authorize_second_attempt_conflicts_without_overwrite() {
-    let store = FakeStore::new();
+    let (store, client) = harness();
     let sid = valid_session_id();
-    DeviceService::create_session_with(&store, &sid, |_| Ok("<svg/>".to_string()))
+    DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
         .await
         .unwrap();
-    DeviceService::authorize_device_with(&store, 42, &sid, None, || Ok("tok-first".to_string()))
-        .await
-        .unwrap();
+    let first = sample_user(42);
+    DeviceService::authorize_device_with(&store, &client, &first, &sid, None, || {
+        Ok("tok-first".to_string())
+    })
+    .await
+    .unwrap();
     // Same session, different user → loser gets 409 and the winner's binding is preserved.
-    let err = DeviceService::authorize_device_with(&store, 43, &sid, None, || Ok("tok-second".to_string()))
-        .await
-        .unwrap_err();
+    let second = sample_user(43);
+    let err = DeviceService::authorize_device_with(&store, &client, &second, &sid, None, || {
+        Ok("tok-second".to_string())
+    })
+    .await
+    .unwrap_err();
     assert_eq!(err.status, 409);
-    let session = store.sessions.lock().unwrap().get(&sid).cloned().unwrap();
-    assert_eq!(session.user_id, Some(42));
-    assert_eq!(session.device_token.as_deref(), Some("tok-first"));
+    let status = DeviceService::check_session_with(&client, &sid).await.unwrap();
+    assert_eq!(status.user.map(|u| u.id), Some(42));
+    assert_eq!(status.token.as_deref(), Some("tok-first"));
     // Loser's token was never persisted.
-    assert!(store.tokens.lock().unwrap().iter().all(|t| t.token != "tok-second"));
+    assert!(
+        store.tokens.lock().unwrap().iter().all(|t| t.token != "tok-second"),
+        "loser token must be compensated"
+    );
 }
 
 #[tokio::test]
-async fn authorize_rejects_empty_and_missing() {
-    let store = FakeStore::new();
-    let err = DeviceService::authorize_device_with(&store, 1, "   ", None, || Ok("t".to_string()))
+async fn authorize_refused_commit_compensates_token() {
+    let (store, client) = harness();
+    let sid = valid_session_id();
+    DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
         .await
-        .unwrap_err();
+        .unwrap();
+    // Status still reads pending, but the commit loses the race.
+    *client.refuse_commit.lock().unwrap() = true;
+    let user = sample_user(7);
+    let err = DeviceService::authorize_device_with(&store, &client, &user, &sid, None, || {
+        Ok("tok-race".to_string())
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(err.status, 409);
+    assert!(store.tokens.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn authorize_commit_error_compensates_token() {
+    let (store, client) = harness();
+    let sid = valid_session_id();
+    DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
+        .await
+        .unwrap();
+    *client.fail_commit.lock().unwrap() = true;
+    let user = sample_user(7);
+    let err = DeviceService::authorize_device_with(&store, &client, &user, &sid, None, || {
+        Ok("tok-err".to_string())
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(err.status, 502);
+    assert!(store.tokens.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn authorize_rejects_empty_missing_and_expired() {
+    let (store, client) = harness();
+    let user = sample_user(1);
+    let err = DeviceService::authorize_device_with(&store, &client, &user, "   ", None, || {
+        Ok("t".to_string())
+    })
+    .await
+    .unwrap_err();
     assert_eq!(err.status, 400);
 
-    let err = DeviceService::authorize_device_with(
-        &store, 1, "nonexistent", None, || Ok("t".to_string()),
-    )
+    let err = DeviceService::authorize_device_with(&store, &client, &user, "nonexistent", None, || {
+        Ok("t".to_string())
+    })
     .await
     .unwrap_err();
     assert_eq!(err.status, 404);
+
+    let sid = valid_session_id();
+    DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
+        .await
+        .unwrap();
+    client.seed(
+        &sid,
+        PairingState {
+            status: "expired".to_string(),
+            expires_at: "e".to_string(),
+            token: None,
+            user: None,
+        },
+    );
+    let err = DeviceService::authorize_device_with(&store, &client, &user, &sid, None, || {
+        Ok("t".to_string())
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(err.status, 404);
+    assert!(store.tokens.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn create_session_reuse_propagates_store_failures() {
+    let (store, client) = harness();
+    let sid = valid_session_id();
+    DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
+        .await
+        .unwrap();
+    let user = sample_user(42);
+    DeviceService::authorize_device_with(&store, &client, &user, &sid, None, || {
+        Ok("tok-first".to_string())
+    })
+    .await
+    .unwrap();
+    // Re-create hits the authorized-reuse path: missing index row is 404.
+    store.codes.lock().unwrap().remove(&sid);
+    let err = DeviceService::create_session_with(&store, &client, &sid, |_| {
+        Ok("<svg/>".to_string())
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(err.status, 404);
+
+    // A failing index read on the reuse path is 502.
+    store.codes.lock().unwrap().insert(
+        sid.clone(),
+        backend::models::device::PairingCode {
+            session_id: sid.clone(),
+            short_code: sid[..6].to_string(),
+            expires_at: "e".to_string(),
+        },
+    );
+    store.fail_next("index down");
+    let err = DeviceService::create_session_with(&store, &client, &sid, |_| {
+        Ok("<svg/>".to_string())
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(err.status, 502);
+}
+
+#[tokio::test]
+async fn authorize_propagates_store_and_client_failures() {
+    let user = sample_user(1);
+    // Code lookup failure.
+    let (store, client) = harness();
+    store.fail_next("index down");
+    let err = DeviceService::authorize_device_with(&store, &client, &user, "abcdef", None, || {
+        Ok("t".to_string())
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(err.status, 502);
+
+    // Status read failure (full session id skips the index).
+    let (store, client) = harness();
+    let sid = valid_session_id();
+    DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
+        .await
+        .unwrap();
+    client.fail_next("do down");
+    let err = DeviceService::authorize_device_with(&store, &client, &user, &sid, None, || {
+        Ok("t".to_string())
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(err.status, 502);
+
+    // Token insert failure persists nothing.
+    let (store, client) = harness();
+    DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
+        .await
+        .unwrap();
+    *store.fail_insert.lock().unwrap() = true;
+    let err = DeviceService::authorize_device_with(&store, &client, &user, &sid, None, || {
+        Ok("tok-x".to_string())
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(err.status, 502);
+    assert!(store.tokens.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn authorize_token_gen_failure_maps_500() {
-    let store = FakeStore::new();
+    let (store, client) = harness();
     let sid = valid_session_id();
-    DeviceService::create_session_with(&store, &sid, |_| Ok("<svg/>".to_string()))
+    DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
         .await
         .unwrap();
-    let err = DeviceService::authorize_device_with(&store, 1, &sid, None, || Err("rng".to_string()))
-        .await
-        .unwrap_err();
+    let user = sample_user(1);
+    let err = DeviceService::authorize_device_with(&store, &client, &user, &sid, None, || {
+        Err("rng".to_string())
+    })
+    .await
+    .unwrap_err();
     assert_eq!(err.status, 500);
 }
 
 #[tokio::test]
 async fn check_session_pending_authorized_expired() {
-    let store = FakeStore::new();
+    let (_store, client) = harness();
     // Missing -> 400, unknown -> 404.
     assert_eq!(
-        DeviceService::check_session_with(&store, "  ")
-            .await
-            .unwrap_err()
-            .status,
+        DeviceService::check_session_with(&client, "  ").await.unwrap_err().status,
         400
     );
     assert_eq!(
-        DeviceService::check_session_with(&store, "nope")
-            .await
-            .unwrap_err()
-            .status,
+        DeviceService::check_session_with(&client, "nope").await.unwrap_err().status,
         404
     );
 
     let sid = valid_session_id();
-    DeviceService::create_session_with(&store, &sid, |_| Ok("<svg/>".to_string()))
-        .await
-        .unwrap();
-    let pending = DeviceService::check_session_with(&store, &sid).await.unwrap();
+    client.seed(&sid, pending_state("2099-01-01T00:00:00.000Z"));
+    let pending = DeviceService::check_session_with(&client, &sid).await.unwrap();
     assert_eq!(pending.status, "pending");
     assert!(pending.token.is_none());
 
-    // Authorize then poll returns token + user.
-    store.users.lock().unwrap().insert(9, sample_user(9));
-    // Manually mark authorized with user 9.
-    {
-        let mut sessions = store.sessions.lock().unwrap();
-        let s = sessions.get_mut(&sid).unwrap();
-        s.status = "authorized".to_string();
-        s.user_id = Some(9);
-        s.device_token = Some("tok-9".to_string());
-    }
-    let got = DeviceService::check_session_with(&store, &sid).await.unwrap();
+    // Authorized returns token + user; pending views never leak them.
+    client.seed(
+        &sid,
+        PairingState {
+            status: "authorized".to_string(),
+            expires_at: "e".to_string(),
+            token: Some("tok-9".to_string()),
+            user: Some(sample_user(9)),
+        },
+    );
+    let got = DeviceService::check_session_with(&client, &sid).await.unwrap();
     assert_eq!(got.status, "authorized");
     assert_eq!(got.token.as_deref(), Some("tok-9"));
     assert_eq!(got.user.map(|u| u.id), Some(9));
 
-    // Expired passthrough.
-    let mut exp = sample_session(&"ef".repeat(64), "expired");
-    exp.session_id = "expsess".to_string();
-    store
-        .sessions
-        .lock()
-        .unwrap()
-        .insert("expsess".to_string(), exp);
-    let got = DeviceService::check_session_with(&store, "expsess")
-        .await
-        .unwrap();
+    client.seed(
+        "expsess",
+        PairingState {
+            status: "expired".to_string(),
+            expires_at: "e".to_string(),
+            token: None,
+            user: None,
+        },
+    );
+    let got = DeviceService::check_session_with(&client, "expsess").await.unwrap();
     assert_eq!(got.status, "expired");
+    assert!(got.token.is_none());
+}
+
+#[tokio::test]
+async fn check_session_client_failure_propagates() {
+    let (_store, client) = harness();
+    client.fail_next("do down");
+    let err = DeviceService::check_session_with(&client, &valid_session_id())
+        .await
+        .unwrap_err();
+    assert_eq!(err.status, 502);
 }
 
 #[tokio::test]
 async fn get_and_revoke_devices() {
-    let store = FakeStore::new();
-    assert!(DeviceService::get_user_devices_with(&store, 1)
-        .await
-        .unwrap()
-        .is_empty());
+    let (store, _client) = harness();
+    let notifier = FakeNotifier::new();
+    assert!(DeviceService::get_user_devices_with(&store, 1).await.unwrap().is_empty());
     store.tokens.lock().unwrap().push(DeviceToken {
         token: "t1".to_string(),
         user_id: 1,
@@ -438,26 +663,63 @@ async fn get_and_revoke_devices() {
         expires_at: "e".to_string(),
         last_used_at: None,
     });
-    assert_eq!(
-        DeviceService::get_user_devices_with(&store, 1)
-            .await
-            .unwrap()
-            .len(),
-        1
-    );
-    assert!(DeviceService::revoke_device_with(&store, 1, "t1")
-        .await
-        .unwrap());
-    assert!(!DeviceService::revoke_device_with(&store, 1, "t1")
-        .await
-        .unwrap());
+    assert_eq!(DeviceService::get_user_devices_with(&store, 1).await.unwrap().len(), 1);
+    assert!(DeviceService::revoke_device_with(&store, &notifier, 1, "t1").await.unwrap());
+    assert!(!DeviceService::revoke_device_with(&store, &notifier, 1, "t1").await.unwrap());
 
     store.fail_next("db");
     assert_eq!(
-        DeviceService::get_user_devices_with(&store, 1)
-            .await
-            .unwrap_err()
-            .status,
+        DeviceService::get_user_devices_with(&store, 1).await.unwrap_err().status,
         502
     );
+}
+
+#[tokio::test]
+async fn revoke_notifies_live_device_only_on_success() {
+    let (store, _client) = harness();
+    let notifier = FakeNotifier::new();
+    store.tokens.lock().unwrap().push(DeviceToken {
+        token: "live-1".to_string(),
+        user_id: 1,
+        device_name: "Phone".to_string(),
+        created_at: "c".to_string(),
+        expires_at: "e".to_string(),
+        last_used_at: None,
+    });
+
+    assert!(DeviceService::revoke_device_with(&store, &notifier, 1, "live-1").await.unwrap());
+    assert_eq!(notifier.calls.lock().unwrap().as_slice(), ["live-1"]);
+
+    // Revoking nothing notifies nothing.
+    assert!(!DeviceService::revoke_device_with(&store, &notifier, 1, "gone").await.unwrap());
+    assert_eq!(notifier.calls.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn revoke_succeeds_when_push_fails() {
+    let (store, _client) = harness();
+    let notifier = FakeNotifier::new();
+    store.tokens.lock().unwrap().push(DeviceToken {
+        token: "t9".to_string(),
+        user_id: 1,
+        device_name: "Phone".to_string(),
+        created_at: "c".to_string(),
+        expires_at: "e".to_string(),
+        last_used_at: None,
+    });
+    // Best-effort: the push is fire-and-forget; revocation always commits.
+    assert!(DeviceService::revoke_device_with(&store, &notifier, 1, "t9").await.unwrap());
+    assert!(DeviceService::get_user_devices_with(&store, 1).await.unwrap().is_empty());
+
+    // Without a binding there is simply no one to notify.
+    let quiet = NoNotify;
+    store.tokens.lock().unwrap().push(DeviceToken {
+        token: "t8".to_string(),
+        user_id: 1,
+        device_name: "Phone".to_string(),
+        created_at: "c".to_string(),
+        expires_at: "e".to_string(),
+        last_used_at: None,
+    });
+    assert!(DeviceService::revoke_device_with(&store, &quiet, 1, "t8").await.unwrap());
 }

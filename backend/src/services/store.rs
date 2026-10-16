@@ -2,11 +2,12 @@ use worker::D1Database;
 
 use crate::db;
 use crate::models::auth::User;
-use crate::models::device::{DeviceSession, DeviceToken};
+use crate::models::device::{CheckSessionResponse, DeviceToken, PairingCode, PairingState};
 use crate::models::error::{AppError, AppResult};
 
-/// Testable storage seam for services.
-/// Production is backed by D1 (`D1Stores`); tests use in-memory fakes.
+/// Testable storage seams for services.
+/// Production D1 is `D1Stores`; the pairing referee is a Durable
+/// Object behind `PairingClient` (see `services::pairing`).
 #[allow(async_fn_in_trait)]
 pub trait UserStore {
     async fn store_get_user_by_sub(&self, sub: &str) -> AppResult<Option<User>>;
@@ -21,31 +22,54 @@ pub trait UserStore {
     ) -> AppResult<User>;
 }
 
+/// D1 side of pairing: code index + long-lived device tokens only.
+/// Pairing state never lives here.
 #[allow(async_fn_in_trait)]
-pub trait DeviceStore {
-    async fn store_upsert_device_session(
+pub trait PairingStore {
+    async fn store_upsert_pairing_code(
         &self,
         session_id: &str,
         short_code: &str,
-    ) -> AppResult<DeviceSession>;
-    async fn store_get_device_session(&self, session_id: &str) -> AppResult<Option<DeviceSession>>;
-    async fn store_find_pending_session(
+    ) -> AppResult<PairingCode>;
+    async fn store_find_session_by_code(&self, code: &str) -> AppResult<Option<PairingCode>>;
+    async fn store_get_pairing_code(&self, session_id: &str) -> AppResult<Option<PairingCode>>;
+    async fn store_insert_device_token(
         &self,
-        code_or_session_id: &str,
-    ) -> AppResult<Option<DeviceSession>>;
-    async fn store_find_session_for_authorize(
-        &self,
-        code_or_session_id: &str,
-    ) -> AppResult<Option<DeviceSession>>;
-    async fn store_authorize_device_session(
-        &self,
-        session_id: &str,
         user_id: i64,
         device_token: &str,
         device_name: &str,
-    ) -> AppResult<bool>;
+    ) -> AppResult<()>;
+    async fn store_delete_device_token(&self, device_token: &str) -> AppResult<()>;
     async fn store_get_user_devices(&self, user_id: i64) -> AppResult<Vec<DeviceToken>>;
     async fn store_revoke_device_token(&self, user_id: i64, token: &str) -> AppResult<bool>;
+}
+
+/// Push side of revocation: tells a live device its token just died.
+/// Fire-and-forget — errors are intentionally swallowed at every call site.
+#[allow(async_fn_in_trait)]
+pub trait DeviceNotifier {
+    async fn notify_revoked(&self, device_token: &str);
+}
+
+/// Used when the notifier binding is unavailable: revocation still commits.
+pub struct NoNotify;
+
+impl DeviceNotifier for NoNotify {
+    async fn notify_revoked(&self, _device_token: &str) {}
+}
+
+/// Durable Object side of pairing: the state referee.
+#[allow(async_fn_in_trait)]
+pub trait PairingClient {
+    async fn client_init(&self, session_id: &str, expires_at: &str) -> AppResult<PairingState>;
+    async fn client_status(&self, session_id: &str) -> AppResult<Option<CheckSessionResponse>>;
+    /// `Ok(false)` means the object refused (already authorized).
+    async fn client_commit(
+        &self,
+        session_id: &str,
+        device_token: &str,
+        user: &User,
+    ) -> AppResult<bool>;
 }
 
 /// Production adapter over `D1Database`.
@@ -84,51 +108,44 @@ impl UserStore for D1Stores<'_> {
     }
 }
 
-impl DeviceStore for D1Stores<'_> {
-    async fn store_upsert_device_session(
+impl PairingStore for D1Stores<'_> {
+    async fn store_upsert_pairing_code(
         &self,
         session_id: &str,
         short_code: &str,
-    ) -> AppResult<DeviceSession> {
-        db::upsert_device_session(self.0, session_id, short_code)
+    ) -> AppResult<PairingCode> {
+        db::upsert_pairing_code(self.0, session_id, short_code)
             .await
-            .map_err(|_| AppError::bad_gateway("Failed to save device session."))
+            .map_err(|_| AppError::bad_gateway("Failed to save pairing code."))
     }
 
-    async fn store_get_device_session(&self, session_id: &str) -> AppResult<Option<DeviceSession>> {
-        db::get_device_session(self.0, session_id)
-            .await
-            .map_err(|_| AppError::bad_gateway("Database error."))
-    }
-
-    async fn store_find_pending_session(
-        &self,
-        code_or_session_id: &str,
-    ) -> AppResult<Option<DeviceSession>> {
-        db::find_pending_session(self.0, code_or_session_id)
+    async fn store_find_session_by_code(&self, code: &str) -> AppResult<Option<PairingCode>> {
+        db::find_session_by_code(self.0, code)
             .await
             .map_err(|_| AppError::bad_gateway("Database error."))
     }
 
-    async fn store_find_session_for_authorize(
-        &self,
-        code_or_session_id: &str,
-    ) -> AppResult<Option<DeviceSession>> {
-        db::find_session_for_authorize(self.0, code_or_session_id)
+    async fn store_get_pairing_code(&self, session_id: &str) -> AppResult<Option<PairingCode>> {
+        db::get_pairing_code(self.0, session_id)
             .await
             .map_err(|_| AppError::bad_gateway("Database error."))
     }
 
-    async fn store_authorize_device_session(
+    async fn store_insert_device_token(
         &self,
-        session_id: &str,
         user_id: i64,
         device_token: &str,
         device_name: &str,
-    ) -> AppResult<bool> {
-        db::authorize_device_session(self.0, session_id, user_id, device_token, device_name)
+    ) -> AppResult<()> {
+        db::insert_device_token(self.0, user_id, device_token, device_name)
             .await
             .map_err(|_| AppError::bad_gateway("Failed to authorize device session."))
+    }
+
+    async fn store_delete_device_token(&self, device_token: &str) -> AppResult<()> {
+        db::delete_device_token(self.0, device_token)
+            .await
+            .map_err(|_| AppError::bad_gateway("Failed to clean up device token."))
     }
 
     async fn store_get_user_devices(&self, user_id: i64) -> AppResult<Vec<DeviceToken>> {
@@ -143,4 +160,3 @@ impl DeviceStore for D1Stores<'_> {
             .map_err(|_| AppError::bad_gateway("Failed to revoke device."))
     }
 }
-

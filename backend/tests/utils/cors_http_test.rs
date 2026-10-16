@@ -1,4 +1,6 @@
-use backend::utils::{is_origin_allowed, parse_allowed_origins, parse_bearer_header};
+use backend::utils::{
+    is_origin_allowed, is_websocket_upgrade, parse_allowed_origins, parse_bearer_header,
+};
 use backend::common::DEFAULT_ORIGINS;
 
 #[test]
@@ -43,6 +45,14 @@ fn is_origin_allowed_matches_exactly() {
     assert!(!is_origin_allowed(Some("https://b.example"), &allowed));
     assert!(!is_origin_allowed(None, &allowed));
     assert!(!is_origin_allowed(Some("https://a.example"), &[]));
+}
+
+#[test]
+fn websocket_upgrade_bypasses_cors_mutation() {
+    assert!(is_websocket_upgrade(101));
+    assert!(!is_websocket_upgrade(200));
+    assert!(!is_websocket_upgrade(204));
+    assert!(!is_websocket_upgrade(500));
 }
 
 #[test]

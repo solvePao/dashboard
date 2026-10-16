@@ -1,11 +1,16 @@
 pub mod common;
 pub mod db;
 pub mod models;
+pub mod objects;
 pub mod routes;
 pub mod services;
 pub mod utils;
 
-use utils::{allowed_origins, apply_cors, cors_preflight, request_origin};
+pub use objects::{DeviceObject, PairingObject};
+
+use utils::{
+    allowed_origins, apply_cors, cors_preflight, is_websocket_upgrade, request_origin,
+};
 use worker::*;
 
 #[event(fetch)]
@@ -38,8 +43,14 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/api/auth/device/check", |req, ctx| async move {
             routes::device::check_session(req, ctx).await
         })
+        .get_async("/api/auth/device/ws/:session_id", |req, ctx| async move {
+            routes::device::pairing_socket(req, ctx).await
+        })
         .get_async("/api/devices", |req, ctx| async move {
             routes::device::get_devices(req, ctx).await
+        })
+        .get_async("/api/devices/ws/:token", |req, ctx| async move {
+            routes::device::device_socket(req, ctx).await
         })
         .delete_async("/api/devices/:token", |req, ctx| async move {
             routes::device::revoke_device(req, ctx).await
@@ -47,5 +58,9 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .run(req, env)
         .await?;
 
+    // Upgrades pass through untouched (see `is_websocket_upgrade`).
+    if is_websocket_upgrade(res.status_code()) {
+        return Ok(res);
+    }
     apply_cors(origin.as_deref(), &allowed, res)
 }

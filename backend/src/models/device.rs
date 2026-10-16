@@ -1,16 +1,37 @@
 use serde::{Deserialize, Serialize};
 use super::auth::User;
 
+/// D1 pairing-code index row: a pointer only. Pairing state lives in
+/// the `PairingObject` Durable Object, never in this table.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct DeviceSession {
+pub struct PairingCode {
     pub session_id: String,
     pub short_code: String,
-    pub status: String,
-    pub user_id: Option<i64>,
-    pub device_token: Option<String>,
-    pub created_at: String,
     pub expires_at: String,
-    pub updated_at: String,
+}
+
+/// Worker -> Durable Object: start (or refresh) a pending pairing.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PairingInitRequest {
+    pub expires_at: String,
+}
+
+/// Worker -> Durable Object: commit a minted token for a pending pairing.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PairingCommitRequest {
+    pub token: String,
+    pub user: User,
+}
+
+/// Durable Object pairing snapshot, shared by commit/status/push.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PairingState {
+    pub status: String,
+    pub expires_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<User>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -56,7 +77,7 @@ pub struct CheckSessionRequest {
     pub session_id: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckSessionResponse {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]

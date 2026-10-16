@@ -17,23 +17,19 @@ fn user_sql_builders() {
 
 #[test]
 fn device_sql_builders() {
-    let up = upsert_device_session_sql();
-    assert!(up.contains("device_sessions"));
+    // Pairing state lives in the Durable Object; D1 holds only the
+    // code index plus long-lived device tokens.
+    let up = upsert_pairing_code_sql();
+    assert!(up.contains("pairing_codes"));
     assert!(up.contains(SESSION_EXPIRY_SQL));
-    let g = get_device_session_sql();
-    assert!(g.contains("CASE"));
-    assert!(g.contains("expired"));
-    let p = find_pending_session_sql();
+    let g = get_pairing_code_sql();
+    assert!(g.contains("session_id = ?1"));
+    let p = find_session_by_code_sql();
     assert!(p.contains("lower(short_code)"));
-    assert!(p.contains("pending"));
-    assert!(p.contains(SQL_NOW));
+    assert!(p.contains("expires_at"));
+    assert!(p.contains("ORDER BY created_at DESC"));
     assert!(insert_device_token_sql().contains(TOKEN_EXPIRY_SQL));
-    let authz = mark_session_authorized_sql();
-    assert!(authz.contains("'authorized'"));
-    // Concurrent losers must affect 0 rows, never overwrite the winner.
-    assert!(authz.contains("status = 'pending'"));
-    // Re-creating an authorized session must not flip it back to pending.
-    assert!(up.contains("!= 'authorized'"));
+    assert!(delete_device_token_sql().contains("DELETE FROM device_tokens"));
     let d = get_user_devices_sql();
     assert!(d.contains("device_tokens"));
     assert!(d.contains("ORDER BY created_at DESC"));
@@ -67,7 +63,7 @@ fn schema_applies_and_user_sql_runs() {
 }
 
 #[test]
-fn device_session_sql_runs_end_to_end() {
+fn pairing_code_sql_runs_end_to_end() {
     let conn = memory_db();
     conn.execute(
         "INSERT INTO users (google_sub, email) VALUES ('sub-1', 'a@x.com')",
@@ -77,47 +73,40 @@ fn device_session_sql_runs_end_to_end() {
     let user_id: i64 = conn
         .query_row("SELECT id FROM users WHERE google_sub = 'sub-1'", [], |r| r.get(0))
         .unwrap();
+    // The index is a pointer only: code -> session, nothing about status.
     conn.execute(
-        "INSERT INTO device_sessions (session_id, short_code, status, expires_at, created_at, updated_at) VALUES (?1, ?2, 'pending', '2099-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+        "INSERT INTO pairing_codes (session_id, short_code, expires_at, created_at) VALUES (?1, ?2, '2099-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
         rusqlite::params!["sess-1", "abc123"],
     )
     .unwrap();
-    let status: String = conn
+    let code: String = conn
         .query_row(
-            "SELECT status FROM device_sessions WHERE session_id = 'sess-1'",
+            "SELECT short_code FROM pairing_codes WHERE lower(short_code) = 'abc123' AND expires_at > '2026-01-01T00:00:00.000Z'",
             [],
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(status, "pending");
+    assert_eq!(code, "abc123");
 
     conn.execute(
         "INSERT INTO device_tokens (token, user_id, device_name, expires_at, created_at, last_used_at) VALUES (?1, ?2, ?3, '2099-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
         rusqlite::params!["tok-1", user_id, "Mobile Device"],
     )
     .unwrap();
-    conn.execute(
-        "UPDATE device_sessions SET status = 'authorized', user_id = 1, device_token = 'tok-1' WHERE session_id = 'sess-1'",
-        [],
-    )
-    .unwrap();
-    let status: String = conn
-        .query_row(
-            "SELECT status FROM device_sessions WHERE session_id = 'sess-1'",
-            [],
-            |r| r.get(0),
-        )
+    conn.execute("DELETE FROM device_tokens WHERE token = 'tok-1'", [])
         .unwrap();
-    assert_eq!(status, "authorized");
+    let remaining: i64 = conn
+        .query_row("SELECT COUNT(*) FROM device_tokens", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(remaining, 0);
 }
 
 #[test]
 fn expiry_sql_fragments_are_present_in_builders() {
     // Ensures production SQL uses time constants, not hardcoded literals.
     for sql in [
-        upsert_device_session_sql(),
-        get_device_session_sql(),
-        find_pending_session_sql(),
+        upsert_pairing_code_sql(),
+        find_session_by_code_sql(),
         get_user_devices_sql(),
         get_user_by_device_token_sql(),
     ] {

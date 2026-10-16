@@ -35,52 +35,35 @@ pub fn touch_device_token_sql() -> String {
     format!("UPDATE device_tokens SET last_used_at = {SQL_NOW} WHERE token = ?1")
 }
 
-pub fn upsert_device_session_sql() -> String {
-    // The WHERE guard is load-bearing: re-creating an already-authorized
-    // session must never flip it back to 'pending' (that would reopen a
-    // finished pairing). Authorized rows keep their state; only
-    // pending/expired rows are reset.
+/// Pointer insert only. The authorized guard lives in the service/DO:
+/// re-creating an authorized pairing never reaches this statement.
+///
+/// `created_at` is intentionally reset on conflict: `find_session_by_code_sql`
+/// orders by `created_at DESC` so a refreshed session always wins a short-code
+/// collision over an older, potentially expired one.
+pub fn upsert_pairing_code_sql() -> String {
     format!(
-        "INSERT INTO device_sessions (session_id, short_code, status, expires_at, created_at, updated_at) \
-         VALUES (?1, ?2, 'pending', {SESSION_EXPIRY_SQL}, {SQL_NOW}, {SQL_NOW}) \
-         ON CONFLICT(session_id) DO UPDATE SET short_code = excluded.short_code, status = 'pending', \
-         expires_at = {SESSION_EXPIRY_SQL}, updated_at = {SQL_NOW} \
-         WHERE device_sessions.status != 'authorized'"
+        "INSERT INTO pairing_codes (session_id, short_code, expires_at, created_at) \
+         VALUES (?1, ?2, {SESSION_EXPIRY_SQL}, {SQL_NOW}) \
+         ON CONFLICT(session_id) DO UPDATE SET short_code = excluded.short_code, \
+         expires_at = {SESSION_EXPIRY_SQL}, created_at = {SQL_NOW}"
     )
 }
 
-pub fn get_device_session_sql() -> String {
-    format!(
-        "SELECT session_id, short_code, \
-                CASE \
-                    WHEN status = 'pending' AND expires_at <= {SQL_NOW} THEN 'expired' \
-                    ELSE status \
-                END as status, \
-                user_id, device_token, created_at, expires_at, updated_at \
-         FROM device_sessions WHERE session_id = ?1 LIMIT 1"
-    )
+pub fn get_pairing_code_sql() -> String {
+    "SELECT session_id, short_code, expires_at FROM pairing_codes \
+     WHERE session_id = ?1 LIMIT 1"
+        .to_string()
 }
 
-pub fn find_pending_session_sql() -> String {
+/// Code -> session translation. Newest wins when prefixes collide,
+/// matching the previous pending-lookup ordering.
+pub fn find_session_by_code_sql() -> String {
     format!(
-        "SELECT session_id, short_code, status, user_id, device_token, created_at, expires_at, updated_at \
-         FROM device_sessions \
-         WHERE (session_id = ?1 OR lower(short_code) = ?2) \
-           AND status = 'pending' \
-           AND expires_at > {SQL_NOW} \
+        "SELECT session_id, short_code, expires_at FROM pairing_codes \
+         WHERE lower(short_code) = ?1 AND expires_at > {SQL_NOW} \
          ORDER BY created_at DESC LIMIT 1"
     )
-}
-
-/// Session lookup without a status filter, used only to distinguish an
-/// already-authorized session (409) from unknown/expired (404) after the
-/// pending lookup misses.
-pub fn find_session_for_authorize_sql() -> String {
-    "SELECT session_id, short_code, status, user_id, device_token, created_at, expires_at, updated_at \
-     FROM device_sessions \
-     WHERE (session_id = ?1 OR lower(short_code) = ?2) \
-     ORDER BY created_at DESC LIMIT 1"
-        .to_string()
 }
 
 pub fn insert_device_token_sql() -> String {
@@ -90,14 +73,8 @@ pub fn insert_device_token_sql() -> String {
     )
 }
 
-pub fn mark_session_authorized_sql() -> String {
-    // Guard is load-bearing: only a pending, unexpired session may transition
-    // to authorized. Concurrent authorizers serialize on this row; the loser
-    // affects 0 rows and must receive 409, never overwrite the winner.
-    format!(
-        "UPDATE device_sessions SET status = 'authorized', user_id = ?1, device_token = ?2, updated_at = {SQL_NOW} \
-         WHERE session_id = ?3 AND status = 'pending' AND expires_at > {SQL_NOW}"
-    )
+pub fn delete_device_token_sql() -> String {
+    "DELETE FROM device_tokens WHERE token = ?1".to_string()
 }
 
 pub fn get_user_devices_sql() -> String {
@@ -108,7 +85,7 @@ pub fn get_user_devices_sql() -> String {
     )
 }
 
-/// Lowercase lookup key used by `find_pending_session`.
+/// Lowercase lookup key used by the pairing-code index lookup.
 pub fn normalize_session_lookup_key(code_or_session_id: &str) -> String {
     code_or_session_id.to_lowercase()
 }

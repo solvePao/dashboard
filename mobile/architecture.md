@@ -211,6 +211,15 @@ sequenceDiagram
 7. `deviceAuthApi.checkDeviceAuthApi(sessionId)` returns status `"authorized"` with a 6-month token and user details.
 8. Token is persisted in `localStorage` via `deviceStorage.setStoredDeviceToken`.
 9. View automatically transitions to `DeviceAuthorizedView` displaying the user profile.
+10. `useDeviceAuth` establishes a live WebSocket connection via `deviceSocketUrl(token)` to `/api/devices/ws/:token`.
+
+### 3. Real-Time Revocation Handling
+1. When the user revokes the device on the web dashboard, the backend triggers `DeviceObject`'s `/revoke` endpoint.
+2. `DeviceObject` pushes `{"status": "revoked", "message": "Device access was revoked from the web dashboard."}` over the active WebSocket and closes the socket.
+3. Mobile's `deviceSocket.onmessage` receives the revocation payload.
+4. Mobile clears `dashboard.mobile.device_token` from `localStorage`, sets `user` to `null`, and resets `authState` to `"idle"`.
+5. Mobile automatically calls `createSession()` to initiate a fresh pairing handshake (rendering a new QR code and shortcode).
+6. The UI displays the notification banner: `"Device access was revoked from the web dashboard. Scan QR code to reconnect."`
 
 ---
 

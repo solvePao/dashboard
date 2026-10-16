@@ -2,5 +2,7 @@
 mod auth_test;
 #[path = "services/device_test.rs"]
 mod device_test;
+#[path = "services/pairing_test.rs"]
+mod pairing_test;
 #[path = "services/validation_test.rs"]
 mod validation_test;

@@ -24,7 +24,7 @@ pub async fn create_session(mut req: Request, ctx: RouteContext<()>) -> Result<R
         Err(err) => return err.to_response(),
     };
 
-    match DeviceService::create_session(&db, &session_id).await {
+    match DeviceService::create_session(&db, &ctx.env, &session_id).await {
         Ok(res) => json_ok(&res),
         Err(err) => err.to_response(),
     }
@@ -62,8 +62,14 @@ pub async fn authorize_device(mut req: Request, ctx: RouteContext<()>) -> Result
 
     // Failed authorization attempts are delayed by 5 seconds to deter
     // brute-force guessing of pairing codes without D1-backed rate limiting.
-    match DeviceService::authorize_device(&db, user.id, &code_or_session, body.device_name.as_deref())
-        .await
+    match DeviceService::authorize_device(
+        &db,
+        &ctx.env,
+        &user,
+        &code_or_session,
+        body.device_name.as_deref(),
+    )
+    .await
     {
         Ok(res) => json_ok(&res),
         Err(err) => {
@@ -84,15 +90,113 @@ pub async fn check_session(mut req: Request, ctx: RouteContext<()>) -> Result<Re
         Err(err) => return err.to_response(),
     };
 
+    match DeviceService::check_session(&ctx.env, &session_id).await {
+        Ok(res) => json_ok(&res),
+        Err(err) => err.to_response(),
+    }
+}
+
+/// Proxies the mobile WebSocket upgrade to the session's PairingObject.
+///
+/// No auth token is required: the `session_id` is a 128-char random hex string,
+/// making it computationally unguessable. Accepted trade-off: anyone who can observe
+/// the session_id (e.g. via QR interception) can connect and receive the push.
+/// The PairingObject's Wipe alarm (2 min) closes the replay window once the result
+/// is delivered or the session expires.
+pub async fn pairing_socket(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let raw = ctx.param("session_id").map(String::as_str).unwrap_or("");
+    let session_id = match crate::services::validation::validate_session_id(raw) {
+        Ok(id) => id,
+        Err(err) => return err.to_response(),
+    };
+
+    let client = match crate::services::DoPairingClient::from_env(&ctx.env) {
+        Ok(c) => c,
+        Err(err) => return err.to_response(),
+    };
+
+    let stub = match client.namespace().get_by_name(&session_id) {
+        Ok(s) => s,
+        Err(_) => return json_error("Failed to reach pairing session.", 502),
+    };
+
+    // The incoming request carries immutable headers, which the runtime
+    // refuses to forward into a subrequest as-is ("Can't modify immutable
+    // headers"). Rebuild a fresh upgrade request for the object instead.
+    let headers = Headers::new();
+    for name in [
+        "upgrade",
+        "connection",
+        "sec-websocket-key",
+        "sec-websocket-version",
+        "sec-websocket-protocol",
+        "sec-websocket-extensions",
+    ] {
+        if let Ok(Some(value)) = req.headers().get(name) {
+            let _ = headers.set(name, &value);
+        }
+    }
+    let mut init = RequestInit::new();
+    init.method = Method::Get;
+    init.headers = headers;
+    let do_req = match Request::new_with_init("https://pairing/ws", &init) {
+        Ok(r) => r,
+        Err(_) => return json_error("Failed to reach pairing session.", 502),
+    };
+
+    stub.fetch_with_request(do_req).await
+}
+
+/// Proxies the mobile device WebSocket upgrade to the device's DeviceObject.
+pub async fn device_socket(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let token = match validation::require_route_token(ctx.param("token").map(String::as_str)) {
+        Ok(t) => t,
+        Err(err) => return err.to_response(),
+    };
+
     let db = match get_db(&ctx) {
         Ok(db) => db,
         Err(err) => return err.to_response(),
     };
 
-    match DeviceService::check_session(&db, &session_id).await {
-        Ok(res) => json_ok(&res),
-        Err(err) => err.to_response(),
+    match crate::db::users::get_user_by_device_token(&db, &token).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return json_error("Device token not found or expired.", 401),
+        Err(_) => return json_error("Database error.", 500),
     }
+
+    let namespace = match ctx.env.durable_object(crate::common::DEVICE_BINDING_NAME) {
+        Ok(ns) => ns,
+        Err(_) => return json_error("Failed to reach device session.", 502),
+    };
+
+    let stub = match namespace.get_by_name(&token) {
+        Ok(s) => s,
+        Err(_) => return json_error("Failed to reach device session.", 502),
+    };
+
+    let headers = Headers::new();
+    for name in [
+        "upgrade",
+        "connection",
+        "sec-websocket-key",
+        "sec-websocket-version",
+        "sec-websocket-protocol",
+        "sec-websocket-extensions",
+    ] {
+        if let Ok(Some(value)) = req.headers().get(name) {
+            let _ = headers.set(name, &value);
+        }
+    }
+    let mut init = RequestInit::new();
+    init.method = Method::Get;
+    init.headers = headers;
+    let do_req = match Request::new_with_init("https://device/ws", &init) {
+        Ok(r) => r,
+        Err(_) => return json_error("Failed to reach device session.", 502),
+    };
+
+    stub.fetch_with_request(do_req).await
 }
 
 pub async fn get_devices(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -141,7 +245,7 @@ pub async fn revoke_device(req: Request, ctx: RouteContext<()>) -> Result<Respon
         Err(err) => return err.to_response(),
     };
 
-    match DeviceService::revoke_device(&db, user.id, &token_to_revoke).await {
+    match DeviceService::revoke_device(&db, &ctx.env, user.id, &token_to_revoke).await {
         Ok(revoked) => json_ok(&RevokeResponse { revoked }),
         Err(err) => err.to_response(),
     }
