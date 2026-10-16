@@ -1,0 +1,7 @@
+minimumReleaseAgeExclude:
+  - "@dotenvx/dotenvx@2.37.0"
+  - "@dotenvx/primitives@3.3.1"
+  - "@dotenvx/providers@0.3.8"
+overrides:
+  "shadcn-vue@2.8.2>@dotenvx/dotenvx": 2.37.0
+  decode-uri-component: 0.5.0
