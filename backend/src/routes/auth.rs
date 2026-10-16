@@ -1,10 +1,13 @@
 use worker::*;
 
-use crate::models::auth::{GoogleAuthRequest, UserResponse};
+use crate::models::auth::GoogleAuthRequest;
 use crate::services::AuthService;
 use crate::utils::{json_error, json_ok};
 use super::{get_db, validation};
 
+/// Sign-in route (public): the ONLY route that accepts a Google ID token.
+/// Returns the user plus the server-minted JWT the frontend must use
+/// as `Bearer` on every other route.
 pub async fn google_auth(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let body: GoogleAuthRequest = match req.json().await {
         Ok(b) => b,
@@ -22,7 +25,7 @@ pub async fn google_auth(mut req: Request, ctx: RouteContext<()>) -> Result<Resp
     };
 
     match AuthService::login_with_google(&ctx.env, &db, &credential).await {
-        Ok(user) => json_ok(&UserResponse { user }),
+        Ok(login) => json_ok(&login),
         Err(err) => err.to_response(),
     }
 }
@@ -39,23 +42,24 @@ pub async fn get_user(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         Err(err) => return err.to_response(),
     };
 
-    // Caller must authenticate with Google ID token matching the requested sub
-    let profile = match AuthService::verify_google_id_token(&ctx.env, &token).await {
-        Ok(p) => p,
-        Err(err) => return err.to_response(),
-    };
-
-    if let Err(err) = validation::require_sub_match(&profile.sub, &sub) {
-        return err.to_response();
-    }
-
     let db = match get_db(&ctx) {
         Ok(db) => db,
         Err(err) => return err.to_response(),
     };
 
+    // Caller must hold a valid session JWT (or device token) whose
+    // identity matches the requested sub.
+    let user = match AuthService::authenticate(&token, &ctx.env, &db).await {
+        Ok(u) => u,
+        Err(err) => return err.to_response(),
+    };
+
+    if let Err(err) = validation::require_sub_match(&user.google_sub, &sub) {
+        return err.to_response();
+    }
+
     match AuthService::get_user_by_sub(&db, &sub).await {
-        Ok(user) => json_ok(&UserResponse { user }),
+        Ok(user) => json_ok(&crate::models::auth::UserResponse { user }),
         Err(err) => err.to_response(),
     }
 }
@@ -73,7 +77,7 @@ pub async fn get_me(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     };
 
     match AuthService::authenticate(&token, &ctx.env, &db).await {
-        Ok(user) => json_ok(&UserResponse { user }),
+        Ok(user) => json_ok(&crate::models::auth::UserResponse { user }),
         Err(err) => err.to_response(),
     }
 }

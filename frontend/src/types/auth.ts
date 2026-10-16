@@ -12,11 +12,7 @@ export interface SessionUser {
 export interface StoredSession {
   user: SessionUser;
   expiresAt: number;
-  credential?: string;
-}
-
-export interface AuthExchangeResponse {
-  user?: SessionUser;
-  error?: string;
+  /** Server-minted session JWT sent as `Bearer` on authenticated routes. */
+  token: string;
 }
 

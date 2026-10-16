@@ -3,6 +3,10 @@ import type { SessionUser } from "../types/auth";
 
 export interface ExchangeGoogleAuthResponse {
   user: SessionUser;
+  /** Server-minted session JWT — use as `Bearer` on all other routes. */
+  token: string;
+  /** Unix millis when `token` expires. */
+  expires_at: number;
 }
 
 export async function exchangeGoogleCredential(
@@ -13,4 +17,3 @@ export async function exchangeGoogleCredential(
     body: JSON.stringify({ credential }),
   });
 }
-

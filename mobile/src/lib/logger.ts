@@ -23,6 +23,8 @@ export const logger = {
     }
   },
 
+  // warn/error always surface, even in production builds, so backend and
+  // auth failures stay visible where dev-only debug/info are silenced.
   warn(scope: string, message: string, data?: unknown): void {
     if (data === undefined) {
       console.error(prefix(scope, message));

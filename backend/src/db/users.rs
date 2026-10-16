@@ -2,7 +2,7 @@ use worker::*;
 
 use super::queries;
 use crate::models::auth::User;
-use super::helper::text_or_null;
+use super::helper::{text_or_null, user_id_param};
 
 pub async fn get_user_by_sub(db: &D1Database, google_sub: &str) -> Result<Option<User>> {
     let stmt = db.prepare(queries::get_user_by_sub_sql());
@@ -13,7 +13,7 @@ pub async fn get_user_by_sub(db: &D1Database, google_sub: &str) -> Result<Option
 
 pub async fn get_user_by_id(db: &D1Database, id: i64) -> Result<Option<User>> {
     let stmt = db.prepare(queries::get_user_by_id_sql());
-    let args = [D1Type::Integer(id as i32)];
+    let args = [user_id_param(id)?];
     let stmt = stmt.bind_refs(&args)?;
     stmt.first::<User>(None).await
 }

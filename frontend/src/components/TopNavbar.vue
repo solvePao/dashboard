@@ -28,11 +28,7 @@ function handleSignOut(): void {
   signOut();
 }
 
-const navLinks = [
-  { label: "Overview", href: "#", active: true },
-  { label: "Activity", href: "#", active: false },
-  { label: "Settings", href: "#", active: false },
-] as const;
+const navLinks = [{ label: "Overview", href: "#", active: true }] as const;
 </script>
 
 <template>

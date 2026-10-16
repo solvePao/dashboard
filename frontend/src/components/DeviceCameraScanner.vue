@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { nextTick, onBeforeUnmount, ref, useTemplateRef, watch } from "vue";
 import { Loader2 } from "@lucide/vue";
 import { QrScannerManager } from "../services/qrScanner";
 
@@ -13,12 +13,13 @@ const emit = defineEmits<{
 
 const cameraStarting = ref(false);
 const cameraError = ref<string | null>(null);
+const readerEl = useTemplateRef<HTMLDivElement>("readerEl");
 let qrManager: QrScannerManager | null = null;
 
 async function startCamera(): Promise<void> {
+  if (cameraStarting.value || qrManager?.isScanning()) return;
   await nextTick();
-  const readerElement = document.getElementById("qr-reader");
-  if (!readerElement) return;
+  if (!readerEl.value) return;
 
   cameraError.value = null;
   cameraStarting.value = true;
@@ -92,6 +93,7 @@ defineExpose({
 
     <div
       id="qr-reader"
+      ref="readerEl"
       class="w-full overflow-hidden rounded-xl border border-border bg-black/90 shadow-inner"
       style="min-height: 240px"
     ></div>

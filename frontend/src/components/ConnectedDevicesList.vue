@@ -9,14 +9,25 @@ const emit = defineEmits<{
   (e: "add-device"): void;
 }>();
 
-const { currentCredential } = useAuth();
-const { devices, devicesLoading, revokeDevice } = useDevices();
+const { revokeDevice } = useAuth();
+const { devices, devicesLoading, devicesError } = useDevices();
 const revokingToken = ref<string | null>(null);
+const revokeError = ref<string | null>(null);
 
 async function handleRevoke(token: string): Promise<void> {
+  revokeError.value = null;
+  if (!window.confirm("Revoke this device? It will lose access immediately.")) return;
   revokingToken.value = token;
-  await revokeDevice(currentCredential.value, token);
-  revokingToken.value = null;
+  try {
+    const ok = await revokeDevice(token);
+    if (!ok) {
+      revokeError.value = devicesError.value || "Failed to revoke device. Please try again.";
+    }
+  } catch {
+    revokeError.value = "Session expired. Please sign in again.";
+  } finally {
+    revokingToken.value = null;
+  }
 }
 </script>
 
@@ -32,7 +43,7 @@ async function handleRevoke(token: string): Promise<void> {
             Connected Devices
           </h2>
           <p class="text-xs text-muted-foreground mt-0.5">
-            Mobile devices authorized to access your account via 6-month secure tokens
+            Mobile devices authorized to access your account via secure tokens
           </p>
         </div>
       </div>
@@ -45,6 +56,14 @@ async function handleRevoke(token: string): Promise<void> {
         <Smartphone class="h-3.5 w-3.5" />
         <span>Add Device</span>
       </button>
+    </div>
+
+    <div
+      v-if="devicesError || revokeError"
+      class="mt-4 rounded-xl border border-destructive/20 bg-destructive/10 p-3 text-xs text-destructive"
+      role="alert"
+    >
+      {{ revokeError || devicesError }}
     </div>
 
     <!-- Loading State -->

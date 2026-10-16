@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, useTemplateRef } from "vue";
+import { nextTick, onBeforeUnmount, ref, watch, useTemplateRef } from "vue";
 import { Camera, CheckCircle2, KeyRound, Smartphone, X } from "@lucide/vue";
 import { useAuth } from "../composables/useAuth";
 import DeviceCodeForm from "./DeviceCodeForm.vue";
@@ -21,6 +21,16 @@ const resultMessage = ref<{ type: "success" | "error"; text: string } | null>(nu
 
 const codeFormRef = useTemplateRef<InstanceType<typeof DeviceCodeForm>>("codeFormRef");
 const scannerRef = useTemplateRef<InstanceType<typeof DeviceCameraScanner>>("scannerRef");
+const dialogRef = useTemplateRef<HTMLDivElement>("dialogRef");
+let closeTimer: ReturnType<typeof setTimeout> | undefined;
+let lastSubmitAt = 0;
+
+function clearCloseTimer(): void {
+  if (closeTimer) {
+    clearTimeout(closeTimer);
+    closeTimer = undefined;
+  }
+}
 
 async function submitAuthorization(code: string, deviceName: string = "Mobile Device"): Promise<void> {
   const trimmed = code.trim();
@@ -28,6 +38,17 @@ async function submitAuthorization(code: string, deviceName: string = "Mobile De
     resultMessage.value = { type: "error", text: "Please enter the pairing code from your mobile device." };
     return;
   }
+  // extractSessionOrCode returns "" for non-conforming QR payloads
+  // (foreign URLs, wrong schemes, bad shapes): never send those.
+  if (!/^[A-Za-z0-9]{6,128}$/.test(trimmed)) {
+    resultMessage.value = { type: "error", text: "That QR code is not a valid pairing code. Please scan the code on your mobile device." };
+    return;
+  }
+  // Client-side 1/sec throttle mirrors the server limiter and prevents
+  // scanner bursts from hammering authorize.
+  const now = Date.now();
+  if (loading.value || now - lastSubmitAt < 1000) return;
+  lastSubmitAt = now;
 
   loading.value = true;
   resultMessage.value = null;
@@ -38,7 +59,8 @@ async function submitAuthorization(code: string, deviceName: string = "Mobile De
   if (res.success) {
     resultMessage.value = { type: "success", text: res.message };
     codeFormRef.value?.reset();
-    setTimeout(() => {
+    clearCloseTimer();
+    closeTimer = setTimeout(() => {
       emit("close");
     }, 2000);
   } else {
@@ -47,10 +69,15 @@ async function submitAuthorization(code: string, deviceName: string = "Mobile De
 }
 
 function handleClose(): void {
+  clearCloseTimer();
   void scannerRef.value?.stopCamera();
   resultMessage.value = null;
   codeFormRef.value?.reset();
   emit("close");
+}
+
+function handleKeydown(event: KeyboardEvent): void {
+  if (event.key === "Escape") handleClose();
 }
 
 watch(
@@ -58,11 +85,20 @@ watch(
   (isOpen) => {
     if (isOpen) {
       resultMessage.value = null;
+      window.addEventListener("keydown", handleKeydown);
+      void nextTick(() => dialogRef.value?.focus());
     } else {
+      window.removeEventListener("keydown", handleKeydown);
+      clearCloseTimer();
       void scannerRef.value?.stopCamera();
     }
   }
 );
+
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", handleKeydown);
+  clearCloseTimer();
+});
 </script>
 
 <template>
@@ -74,7 +110,9 @@ watch(
     aria-labelledby="add-device-title"
   >
     <div
-      class="relative w-full max-w-md rounded-2xl border border-border bg-card p-6 text-card-foreground shadow-2xl animate-in zoom-in-95 duration-200"
+      ref="dialogRef"
+      tabindex="-1"
+      class="relative w-full max-w-md rounded-2xl border border-border bg-card p-6 text-card-foreground shadow-2xl outline-none animate-in zoom-in-95 duration-200"
     >
       <!-- Header -->
       <div class="flex items-center justify-between border-b border-border/80 pb-4">

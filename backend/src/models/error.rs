@@ -33,6 +33,10 @@ impl AppError {
         Self::new(message, 404)
     }
 
+    pub fn too_many_requests(message: impl Into<String>) -> Self {
+        Self::new(message, 429)
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(message, 500)
     }

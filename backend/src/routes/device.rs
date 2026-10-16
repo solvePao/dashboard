@@ -54,19 +54,22 @@ pub async fn authorize_device(mut req: Request, ctx: RouteContext<()>) -> Result
 
     let code_or_session = match validation::resolve_code_or_session(&body) {
         Ok(c) => c,
-        Err(err) => return err.to_response(),
+        Err(err) => {
+            Delay::from(std::time::Duration::from_secs(crate::common::FAILED_AUTHORIZE_DELAY_SECS)).await;
+            return err.to_response();
+        }
     };
 
-    match DeviceService::authorize_device(
-        &db,
-        user.id,
-        &code_or_session,
-        body.device_name.as_deref(),
-    )
-    .await
+    // Failed authorization attempts are delayed by 5 seconds to deter
+    // brute-force guessing of pairing codes without D1-backed rate limiting.
+    match DeviceService::authorize_device(&db, user.id, &code_or_session, body.device_name.as_deref())
+        .await
     {
         Ok(res) => json_ok(&res),
-        Err(err) => err.to_response(),
+        Err(err) => {
+            Delay::from(std::time::Duration::from_secs(crate::common::FAILED_AUTHORIZE_DELAY_SECS)).await;
+            err.to_response()
+        }
     }
 }
 

@@ -32,12 +32,25 @@ export async function apiClient<T>(
       headers,
     });
 
-    const body = (await res.json().catch(() => null)) as (Record<string, unknown> & { error?: string }) | null;
+    const raw = await res.text().catch(() => "");
+    let body: (Record<string, unknown> & { error?: string }) | null = null;
+    if (raw) {
+      try {
+        body = JSON.parse(raw) as Record<string, unknown> & { error?: string };
+      } catch {
+        body = null;
+      }
+    }
 
     if (!res.ok) {
       const errorMessage =
-        body?.error || `Request failed with status ${res.status}`;
+        (body && typeof body.error === "string" && body.error) ||
+        `Request failed with status ${res.status}`;
       throw new ApiError(errorMessage, res.status, body);
+    }
+
+    if (res.status === 204 || !raw) {
+      return undefined as T;
     }
 
     return body as T;

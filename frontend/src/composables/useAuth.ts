@@ -1,11 +1,11 @@
 import { computed, ref } from "vue";
 import { logger } from "../lib/logger";
+import { ApiError } from "../api/client";
 import { exchangeGoogleCredential } from "../api/authApi";
 import {
   persistSession,
   restoreSession,
   clearSession,
-  decodeExpiry,
 } from "../services/sessionStorage";
 import {
   renderGoogleButton,
@@ -21,36 +21,75 @@ export type { SessionUser, StoredSession };
 export type { DeviceItem };
 
 const user = ref<SessionUser | null>(null);
-const currentCredential = ref<string | null>(null);
+/** Server-minted session JWT. The Google credential is never stored —
+ *  it exists only as the argument of `exchangeCredential` below. */
+const authToken = ref<string | null>(null);
+const sessionExpiresAt = ref<number | null>(null);
 const authError = ref<string | null>(null);
 const authLoading = ref(false);
 
 const {
   devices,
   devicesLoading,
+  devicesError,
   fetchDevices: fetchDevicesAction,
   authorizeDevice: authorizeDeviceAction,
   revokeDevice: revokeDeviceAction,
   clearDevices,
 } = useDevices();
 
+function signOut(): void {
+  disableGoogleAutoSelect();
+  user.value = null;
+  authToken.value = null;
+  sessionExpiresAt.value = null;
+  authError.value = null;
+  clearDevices();
+  clearSession();
+  logger.info("auth", "signed out");
+}
+
+function requireValidToken(): string | null {
+  const token = authToken.value;
+  if (!token) return null;
+  if (sessionExpiresAt.value !== null && sessionExpiresAt.value <= Date.now()) {
+    signOut();
+    authError.value = "Session expired. Please sign in again.";
+    return null;
+  }
+  return token;
+}
+
+function handleUnauthorized(err: unknown): boolean {
+  if (err instanceof ApiError && err.status === 401) {
+    signOut();
+    authError.value = "Session expired. Please sign in again.";
+    return true;
+  }
+  return false;
+}
+
 async function exchangeCredential(credential: string): Promise<void> {
   authLoading.value = true;
   authError.value = null;
   try {
     const data = await exchangeGoogleCredential(credential);
-    const expiresAt = decodeExpiry(credential) ?? Date.now() + 55 * 60 * 1000;
     user.value = data.user;
-    currentCredential.value = credential;
-    persistSession({ user: data.user, expiresAt, credential });
-    logger.info("auth", "login succeeded", { userId: data.user.id });
-    void fetchDevicesAction(credential);
+    authToken.value = data.token;
+    sessionExpiresAt.value = data.expires_at;
+    persistSession({ user: data.user, expiresAt: data.expires_at, token: data.token });
+    logger.info("auth", "login succeeded");
+    await fetchDevicesAction(data.token).catch((err: unknown) => {
+      handleUnauthorized(err);
+    });
   } catch (err) {
+    if (handleUnauthorized(err)) return;
     const message = err instanceof Error ? err.message : "Login failed.";
     logger.error("auth", "login failed", message);
     authError.value = message;
     user.value = null;
-    currentCredential.value = null;
+    authToken.value = null;
+    sessionExpiresAt.value = null;
     clearSession();
   } finally {
     authLoading.value = false;
@@ -74,46 +113,88 @@ async function initGoogleButton(
   }
 }
 
-function signOut(): void {
-  disableGoogleAutoSelect();
-  user.value = null;
-  currentCredential.value = null;
-  authError.value = null;
-  clearDevices();
-  clearSession();
-  logger.info("auth", "signed out");
-}
-
 function initSession(): void {
   const stored = restoreSession();
   if (stored) {
     user.value = stored.user;
-    currentCredential.value = stored.credential || null;
-    logger.info("auth", "restored session", { userId: stored.user.id });
-    if (stored.credential) {
-      void fetchDevicesAction(stored.credential);
-    }
+    authToken.value = stored.token;
+    sessionExpiresAt.value = stored.expiresAt;
+    logger.info("auth", "restored session");
+    void fetchDevicesAction(stored.token).catch((err: unknown) => {
+      handleUnauthorized(err);
+    });
   }
+}
+
+// Cross-tab sign-out sync: the server JWT lives in localStorage (short
+// 60-minute expiry mitigates XSS persistence, but any XSS can still read it
+// during its lifetime — httpOnly cookies would require a backend session
+// refactor, out of scope here). When one tab signs out or its session is
+// cleared/expired, other tabs sign out too instead of acting on a stale JWT.
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event: StorageEvent) => {
+    if (event.key === "dashboard.auth.session" && !event.newValue && authToken.value) {
+      signOut();
+    }
+  });
 }
 
 initSession();
 
 export function useAuth() {
+  async function fetchDevices(): Promise<void> {
+    const token = requireValidToken();
+    if (!token) return;
+    try {
+      await fetchDevicesAction(token);
+    } catch (err) {
+      handleUnauthorized(err);
+    }
+  }
+
+  async function authorizeDevice(
+    codeOrSessionId: string,
+    deviceName: string = "Mobile Device"
+  ): Promise<AuthorizeDeviceResult> {
+    const token = requireValidToken();
+    if (!token) {
+      return { success: false, message: authError.value || "Please sign in to authorize devices." };
+    }
+    try {
+      return await authorizeDeviceAction(token, codeOrSessionId, deviceName);
+    } catch (err) {
+      if (handleUnauthorized(err)) {
+        return { success: false, message: "Session expired. Please sign in again." };
+      }
+      throw err;
+    }
+  }
+
+  async function revokeDevice(deviceToken: string): Promise<boolean> {
+    const token = requireValidToken();
+    if (!token) return false;
+    try {
+      return await revokeDeviceAction(token, deviceToken);
+    } catch (err) {
+      handleUnauthorized(err);
+      return false;
+    }
+  }
+
   return {
     user,
-    currentCredential,
+    authToken,
     authError,
     authLoading,
     devices,
     devicesLoading,
-    isLoggedIn: computed(() => user.value !== null),
+    devicesError,
+    isLoggedIn: computed(() => user.value !== null && authToken.value !== null),
     googleClientId,
     initGoogleButton,
     signOut,
-    fetchDevices: () => fetchDevicesAction(currentCredential.value),
-    authorizeDevice: (codeOrSessionId: string, deviceName: string = "Mobile Device"): Promise<AuthorizeDeviceResult> =>
-      authorizeDeviceAction(currentCredential.value, codeOrSessionId, deviceName),
-    revokeDevice: (token: string): Promise<boolean> =>
-      revokeDeviceAction(currentCredential.value, token),
+    fetchDevices,
+    authorizeDevice,
+    revokeDevice,
   };
 }

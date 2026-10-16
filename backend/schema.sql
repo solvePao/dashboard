@@ -41,3 +41,4 @@ CREATE TABLE IF NOT EXISTS device_tokens (
 );
 
 CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens (user_id);
+

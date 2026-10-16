@@ -5,7 +5,7 @@
 The web dashboard frontend is a high-performance, responsive Single-Page Application (SPA) built with **Vue 3** (Composition API, `<script setup>`), **TypeScript** (strict mode), **Tailwind CSS v4**, **Lucide Icons**, **Reka UI**, and **Vite**.
 
 The codebase enforces a strict separation of concerns following modern frontend engineering principles:
-- **Domain Types (`src/types/`)**: Contract definitions for auth, device pairing, and health checks.
+- **Domain Types (`src/types/`)**: Contract definitions for auth and device pairing.
 - **API Network Layer (`src/api/`)**: Centralized HTTP client with typed responses and error normalization.
 - **Services / Business Logic (`src/services/`)**: Non-reactive business logic, storage drivers, and third-party SDK lifecycles (Google Identity Services, `html5-qrcode`).
 - **Composables Layer (`src/composables/`)**: Reactive state controllers that coordinate network and storage operations.
@@ -32,14 +32,12 @@ frontend/
     ├── types/                     # Strongly typed domain models & API contracts
     │   ├── auth.ts                # SessionUser, StoredSession, AuthExchangeResponse
     │   ├── device.ts              # DeviceItem, AuthorizeDeviceResult, DevicesResponse
-    │   ├── health.ts              # HealthResponse
     │   └── gsi.d.ts               # Google Identity Services (GIS) type declarations
     │
     ├── api/                       # Centralized REST network layer
     │   ├── client.ts              # Typed fetch client with ApiError and JSON handling
     │   ├── authApi.ts             # Google credential exchange (/api/auth/google)
-    │   ├── deviceApi.ts           # Devices query, authorization, and revocation endpoints
-    │   └── healthApi.ts           # Backend health query (/health)
+    │   └── deviceApi.ts           # Devices query, authorization, and revocation endpoints
     │
     ├── services/                  # Non-reactive business logic & third-party SDK drivers
     │   ├── sessionStorage.ts      # Auth localStorage driver & JWT expiry parsing
@@ -49,12 +47,11 @@ frontend/
     ├── composables/               # Reactive state controllers
     │   ├── useAuth.ts             # User session, login, and sign-out reactive state
     │   ├── useDevices.ts          # Connected mobile devices reactive state & actions
-    │   ├── useHealth.ts           # Backend health polling & visibilitychange listener
     │   └── useTheme.ts            # Light/Dark/System theme switcher with storage sync
     │
     ├── components/                # Modular UI presentation components
     │   ├── TopNavbar.vue          # Header with logo, navigation links, theme toggle, profile dropdown
-    │   ├── BottomNavbar.vue       # Status bar with backend connectivity & version indicator
+    │   ├── AppFooter.vue          # Subtle static footer displaying build git commit version
     │   ├── UserProfileCard.vue    # Welcome card with user photo/initial and email
     │   ├── SignInPrompt.vue       # Unauthenticated callout banner
     │   ├── ConnectedDevicesList.vue# Container for paired mobile devices list
@@ -84,7 +81,7 @@ flowchart TD
     subgraph UIComponents["UI Components Layer (src/components/ & App.vue)"]
         App["App.vue"]
         TopNav["TopNavbar.vue"]
-        BottomNav["BottomNavbar.vue"]
+        AppFoot["AppFooter.vue"]
         UserCard["UserProfileCard.vue"]
         SignInBox["SignInPrompt.vue"]
         DevList["ConnectedDevicesList.vue"]
@@ -100,7 +97,7 @@ flowchart TD
     App --> UserCard
     App --> SignInBox
     App --> DevList
-    App --> BottomNav
+    App --> AppFoot
     App --> DevModal
 
     DevList --> DevRow
@@ -112,7 +109,6 @@ flowchart TD
     subgraph ComposablesLayer["Composables Layer (src/composables/)"]
         useAuth["useAuth()"]
         useDevices["useDevices()"]
-        useHealth["useHealth()"]
         useTheme["useTheme()"]
     end
 
@@ -122,7 +118,6 @@ flowchart TD
     DevModal --> useAuth
     GButton --> useAuth
     GButton --> useTheme
-    BottomNav --> useHealth
     TToggle --> useTheme
 
     useAuth --> useDevices
@@ -136,7 +131,6 @@ flowchart TD
     subgraph APILayer["REST API Layer (src/api/)"]
         AuthAPI["authApi.ts\n(exchangeGoogleCredential)"]
         DeviceAPI["deviceApi.ts\n(fetchDevicesApi, authorizeDeviceApi, revokeDeviceApi)"]
-        HealthAPI["healthApi.ts\n(fetchHealthApi)"]
         Client["client.ts\n(apiClient, ApiError)"]
     end
 
@@ -144,15 +138,13 @@ flowchart TD
     useAuth --> GoogleIdentity
     useAuth --> AuthAPI
     useDevices --> DeviceAPI
-    useHealth --> HealthAPI
     CamScan --> QRScanner
 
     AuthAPI --> Client
     DeviceAPI --> Client
-    HealthAPI --> Client
 
     subgraph Backend["Backend Worker (Cloudflare D1)"]
-        Worker["/api/auth/google\n/api/devices\n/api/auth/device/authorize\n/health"]
+        Worker["/api/auth/google\n/api/devices\n/api/auth/device/authorize"]
     end
 
     Client --> Worker
@@ -163,7 +155,6 @@ flowchart TD
 1. **`src/types/` (Domain Types)**
    - **`auth.ts`**: `SessionUser` (user attributes from backend), `StoredSession` (localStorage payload with expiry), `AuthExchangeResponse`.
    - **`device.ts`**: `DeviceItem` (token, paired timestamp, expiry), `AuthorizeDeviceResponse`, `AuthorizeDeviceResult`.
-   - **`health.ts`**: `HealthResponse` (`status`, `release`, `now`).
 
 2. **`src/api/` (Network Layer)**
    - **`client.ts`**: Generic `apiClient<T>(path, options)` configuring base URL (`VITE_API_URL` or fallback), setting JSON headers, validating `res.ok`, and mapping errors to `ApiError`.
@@ -172,7 +163,6 @@ flowchart TD
      - `fetchDevicesApi(credential)` calling `GET /api/devices`.
      - `authorizeDeviceApi(credential, code, deviceName)` calling `POST /api/auth/device/authorize`.
      - `revokeDeviceApi(credential, token)` calling `DELETE /api/devices/:token`.
-   - **`healthApi.ts`**: `fetchHealthApi()` calling `GET /health`.
 
 3. **`src/services/` (Business Logic & Driver Layer)**
    - **`sessionStorage.ts`**: Safely manages `localStorage` operations for `dashboard.auth.session`. Decodes JWT base64 payloads to determine precise session expiration.
@@ -182,11 +172,11 @@ flowchart TD
 4. **`src/composables/` (Reactive Controllers)**
    - **`useAuth.ts`**: Reactive singleton holding `user`, `currentCredential`, `isLoggedIn`, `authLoading`, and `authError`. Provides `signIn` and `signOut`.
    - **`useDevices.ts`**: Reactive singleton holding `devices` and `devicesLoading`. Provides `fetchDevices`, `authorizeDevice`, and `revokeDevice`.
-   - **`useHealth.ts`**: Self-contained polling controller for backend connectivity with `document.visibilitychange` optimization.
    - **`useTheme.ts`**: Manages light, dark, and system theme preferences, synchronizing changes across tabs via the `storage` event and toggling the `dark` class on `document.documentElement`.
 
 5. **`src/components/` (UI Presentation Layer)**
-   - **`App.vue`**: Declarative shell displaying `TopNavbar`, `UserProfileCard` or `SignInPrompt`, `ConnectedDevicesList`, and `BottomNavbar`.
+   - **`App.vue`**: Declarative shell displaying `TopNavbar`, `UserProfileCard` or `SignInPrompt`, `ConnectedDevicesList`, and `AppFooter`.
+   - **`AppFooter.vue`**: Subtle static footer presenting the build git commit version `v(...)`.
    - **`AddDeviceModal.vue`**: Clean modal container switching between `DeviceCodeForm` (manual 6-char input) and `DeviceCameraScanner` (webcam QR scan).
    - **`ConnectedDevicesList.vue`**: Displays connected devices using `DeviceItemRow` for each device.
 

@@ -160,18 +160,40 @@ impl DeviceStore for FakeStore {
             })
             .cloned())
     }
+    async fn store_find_session_for_authorize(
+        &self,
+        code_or_session_id: &str,
+    ) -> AppResult<Option<DeviceSession>> {
+        if let Some(e) = self.take_fail() {
+            return Err(e);
+        }
+        let lower = code_or_session_id.to_lowercase();
+        Ok(self
+            .sessions
+            .lock()
+            .unwrap()
+            .values()
+            .find(|s| {
+                s.session_id == code_or_session_id || s.short_code.to_lowercase() == lower
+            })
+            .cloned())
+    }
     async fn store_authorize_device_session(
         &self,
         session_id: &str,
         user_id: i64,
         device_token: &str,
         device_name: &str,
-    ) -> AppResult<()> {
+    ) -> AppResult<bool> {
         if let Some(e) = self.take_fail() {
             return Err(e);
         }
         let mut sessions = self.sessions.lock().unwrap();
         let s = sessions.get_mut(session_id).expect("session must exist");
+        // Mirror production guard: only pending sessions transition.
+        if s.status != "pending" {
+            return Ok(false);
+        }
         s.status = "authorized".to_string();
         s.user_id = Some(user_id);
         s.device_token = Some(device_token.to_string());
@@ -183,7 +205,7 @@ impl DeviceStore for FakeStore {
             expires_at: "e".to_string(),
             last_used_at: None,
         });
-        Ok(())
+        Ok(true)
     }
     async fn store_get_user_devices(&self, user_id: i64) -> AppResult<Vec<DeviceToken>> {
         if let Some(e) = self.take_fail() {
@@ -265,9 +287,13 @@ async fn authorize_ok_with_defaults_and_custom_name() {
         .await
         .unwrap();
 
-    let res = DeviceService::authorize_device_with(&store, 42, &sid, None, || {
-        Ok("tok123".to_string())
-    })
+    let res = DeviceService::authorize_device_with(
+        &store,
+        42,
+        &sid,
+        None,
+        || Ok("tok123".to_string()),
+    )
     .await
     .unwrap();
     assert_eq!(res.status, "authorized");
@@ -291,18 +317,38 @@ async fn authorize_ok_with_defaults_and_custom_name() {
 }
 
 #[tokio::test]
+async fn authorize_second_attempt_conflicts_without_overwrite() {
+    let store = FakeStore::new();
+    let sid = valid_session_id();
+    DeviceService::create_session_with(&store, &sid, |_| Ok("<svg/>".to_string()))
+        .await
+        .unwrap();
+    DeviceService::authorize_device_with(&store, 42, &sid, None, || Ok("tok-first".to_string()))
+        .await
+        .unwrap();
+    // Same session, different user → loser gets 409 and the winner's binding is preserved.
+    let err = DeviceService::authorize_device_with(&store, 43, &sid, None, || Ok("tok-second".to_string()))
+        .await
+        .unwrap_err();
+    assert_eq!(err.status, 409);
+    let session = store.sessions.lock().unwrap().get(&sid).cloned().unwrap();
+    assert_eq!(session.user_id, Some(42));
+    assert_eq!(session.device_token.as_deref(), Some("tok-first"));
+    // Loser's token was never persisted.
+    assert!(store.tokens.lock().unwrap().iter().all(|t| t.token != "tok-second"));
+}
+
+#[tokio::test]
 async fn authorize_rejects_empty_and_missing() {
     let store = FakeStore::new();
-    let err = DeviceService::authorize_device_with(&store, 1, "   ", None, || {
-        Ok("t".to_string())
-    })
-    .await
-    .unwrap_err();
+    let err = DeviceService::authorize_device_with(&store, 1, "   ", None, || Ok("t".to_string()))
+        .await
+        .unwrap_err();
     assert_eq!(err.status, 400);
 
-    let err = DeviceService::authorize_device_with(&store, 1, "nonexistent", None, || {
-        Ok("t".to_string())
-    })
+    let err = DeviceService::authorize_device_with(
+        &store, 1, "nonexistent", None, || Ok("t".to_string()),
+    )
     .await
     .unwrap_err();
     assert_eq!(err.status, 404);
@@ -315,11 +361,9 @@ async fn authorize_token_gen_failure_maps_500() {
     DeviceService::create_session_with(&store, &sid, |_| Ok("<svg/>".to_string()))
         .await
         .unwrap();
-    let err = DeviceService::authorize_device_with(&store, 1, &sid, None, || {
-        Err("rng".to_string())
-    })
-    .await
-    .unwrap_err();
+    let err = DeviceService::authorize_device_with(&store, 1, &sid, None, || Err("rng".to_string()))
+        .await
+        .unwrap_err();
     assert_eq!(err.status, 500);
 }
 

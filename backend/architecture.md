@@ -25,6 +25,7 @@ backend/
     │   ├── cors.rs            # CORS origins, request origin parser, preflight
     │   ├── http.rs            # Bearer token extractor, JSON response helpers
     │   ├── crypto.rs          # Cryptographic secure token generator, 128-hex validator
+    │   ├── jwt.rs             # HS256 session JWT mint/verify (pure, unit-tested)
     │   └── qr.rs              # Fast QR SVG renderer
     │
     ├── db/                    # D1 database repository layer
@@ -33,6 +34,7 @@ backend/
     │   ├── users.rs           # User lookup, upsert, and device-token JOIN queries
     │   └── devices.rs         # Device session creation, pending lookup, authorization, token revocation
     │
+
     ├── models/                # Domain models, database structs, and request/response DTOs
     │   ├── mod.rs             # Module declarations
     │   ├── auth.rs            # User entity, Google OAuth profiles, DTOs
@@ -47,8 +49,7 @@ backend/
     └── routes/                # HTTP endpoint handlers
         ├── mod.rs             # Shared route context helpers (e.g., get_db)
         ├── auth.rs            # /api/auth/google, /api/users/:sub, /api/auth/me
-        ├── device.rs          # /api/auth/device/*, /api/devices, /api/devices/:token
-        └── health.rs          # /health
+        └── device.rs          # /api/auth/device/*, /api/devices, /api/devices/:token
 ```
 
 ---
@@ -63,12 +64,10 @@ flowchart TD
     subgraph RoutesLayer["Routes Layer (src/routes/)"]
         AuthRoutes["routes/auth.rs\n- google_auth\n- get_user\n- get_me"]
         DeviceRoutes["routes/device.rs\n- create_session\n- authorize_device\n- check_session\n- get_devices\n- revoke_device"]
-        HealthRoutes["routes/health.rs\n- health"]
     end
     
     Router --> AuthRoutes
     Router --> DeviceRoutes
-    Router --> HealthRoutes
 
     subgraph ServicesLayer["Services Layer (src/services/)"]
         AuthService["services/auth.rs\n(verify_google_id_token, authenticate, login_with_google)"]
@@ -134,7 +133,7 @@ flowchart TD
    - **`auth.rs` (`AuthService`)**:
      - `verify_google_id_token`: Validates tokens against Google's tokeninfo API, checks expiration and `GOOGLE_CLIENT_ID` audience.
      - `login_with_google`: Verifies Google ID tokens and provisions or updates user rows in D1.
-     - `authenticate`: Unified authentication engine supporting mobile device tokens, Google ID tokens, and local development fallback.
+     - `authenticate`: Unified authentication engine supporting server-minted session JWTs and mobile device tokens only.
      - `get_user_by_sub`: Retrieves user records by Google subject ID.
    - **`device.rs` (`DeviceService`)**:
      - `create_session`: Validates 128-hex session IDs, generates QR code SVG, extracts short codes, and persists pending sessions.
@@ -147,7 +146,6 @@ flowchart TD
    - Parses request JSON into strongly typed DTOs, extracts route parameters and headers, delegates to services, and returns formatted responses.
    - **`auth.rs`**: Handles `/api/auth/google`, `/api/users/:sub`, `/api/auth/me`.
    - **`device.rs`**: Handles `/api/auth/device/session`, `/api/auth/device/authorize`, `/api/auth/device/check`, `/api/devices`, `/api/devices/:token`.
-   - **`health.rs`**: Handles `/health`.
    - **`mod.rs`**: Context utilities like `get_db`.
 
 7. **`src/router.rs` (Worker Entry Point & Router Dispatch)**
@@ -159,18 +157,19 @@ flowchart TD
 
 ## 4. Authentication Flow
 
-### Web Google OAuth
-1. Frontend receives Google ID token (`credential`).
-2. Calls `POST /api/auth/google` with `{ "credential": "<token>" }`.
-3. `AuthService::login_with_google` validates token with Google's tokeninfo endpoint, then upserts the user in D1.
-4. Returns user payload to frontend.
+### Web Google OAuth (JWT session)
+1. Frontend receives Google ID token (`credential`) and keeps it only in memory.
+2. Calls `POST /api/auth/google` with `{ "credential": "<token>" }` — the only route that accepts a Google token.
+3. `AuthService::login_with_google` validates token with Google's tokeninfo endpoint, upserts the user in D1, and mints a 60-minute HS256 session JWT (`JWT_SECRET`).
+4. Returns `{ "user": ..., "token": "<jwt>", "expires_at": <unix millis> }`. The frontend stores the JWT (never the Google credential) and sends it as `Authorization: Bearer <jwt>` on every other route.
+5. `AuthService::authenticate` accepts exactly two credentials: the session JWT (with `uid` cross-checked against the user row) or a mobile device token. Google ID tokens and raw `google_sub` values are rejected.
 
 ### Mobile QR Code Device Pairing
 1. Mobile app generates a 128-character hex session ID.
 2. Calls `POST /api/auth/device/session` with `{ "session_id": "<hex>" }`.
 3. Backend creates pending session (valid for 15 minutes) and returns the SVG QR code and 6-character shortcode.
 4. Mobile displays QR and polls `POST /api/auth/device/check`.
-5. Web dashboard user scans QR (or enters shortcode) and calls `POST /api/auth/device/authorize`.
+5. Web dashboard user scans QR (or enters shortcode) and calls `POST /api/auth/device/authorize` with their session JWT. Failed authorization attempts (e.g., invalid code, expired session, or conflict) are delayed by 5 seconds to deter brute-force guessing; successful authorizations respond immediately. The token insert + session update run as one D1 batch.
 6. Backend generates a 64-character cryptographically secure device token (valid for 180 days) and marks session authorized.
 7. Next mobile poll receives `{ "status": "authorized", "token": "<device_token>", "user": {...} }`.
 8. Mobile stores `device_token` and authenticates subsequent requests via `Authorization: Bearer <device_token>`.
@@ -205,8 +204,6 @@ worker-build --release
   Apply schema changes with `make db-schema-prod`.
 - **Rule:** never use `--remote` from a dev shell, and never deploy without
   `--env production`.
-- `/health` reports the running environment (`environment: "dev"` locally,
-  `"production"` after deploy) so a mix-up is visible immediately.
 
 ---
 

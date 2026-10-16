@@ -13,10 +13,16 @@ const emit = defineEmits<{
 const codeInput = ref("");
 const deviceName = ref("Mobile Device");
 
+function normalizeCode(raw: string): string {
+  const trimmed = raw.trim().replace(/\s+/g, "");
+  return trimmed.length <= 12 ? trimmed.toUpperCase() : trimmed;
+}
+
 function handleSubmit(): void {
-  if (!codeInput.value.trim()) return;
+  const code = normalizeCode(codeInput.value);
+  if (!code) return;
   emit("submit", {
-    code: codeInput.value.trim(),
+    code,
     deviceName: deviceName.value.trim() || "Mobile Device",
   });
 }

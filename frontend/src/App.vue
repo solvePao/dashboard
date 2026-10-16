@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import BottomNavbar from "./components/BottomNavbar.vue";
+import AppFooter from "./components/AppFooter.vue";
 import TopNavbar from "./components/TopNavbar.vue";
 import ConnectedDevicesList from "./components/ConnectedDevicesList.vue";
 import AddDeviceModal from "./components/AddDeviceModal.vue";
@@ -15,7 +15,7 @@ const showAddDeviceModal = ref(false);
 <template>
   <TopNavbar />
   <main
-    class="mx-auto w-full max-w-[var(--container-max)] space-y-6 px-4 pt-6 pb-[calc(var(--statusbar-h)+1.5rem)] sm:px-6"
+    class="mx-auto w-full max-w-[var(--container-max)] space-y-6 px-4 pt-6 pb-10 sm:px-6"
   >
     <template v-if="isLoggedIn && user">
       <UserProfileCard :user="user" />
@@ -24,7 +24,7 @@ const showAddDeviceModal = ref(false);
 
     <SignInPrompt v-else />
   </main>
-  <BottomNavbar />
+  <AppFooter />
 
   <AddDeviceModal :open="showAddDeviceModal" @close="showAddDeviceModal = false" />
 </template>

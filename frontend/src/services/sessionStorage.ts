@@ -3,21 +3,6 @@ import type { StoredSession } from "../types/auth";
 
 const STORAGE_KEY = "dashboard.auth.session";
 
-export function decodeExpiry(credential: string): number | null {
-  try {
-    const payload = credential.split(".")[1];
-    if (!payload) return null;
-    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
-    const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
-    const json = JSON.parse(atob(padded)) as { exp?: unknown };
-    if (typeof json.exp === "number") return json.exp * 1000;
-    return null;
-  } catch {
-    logger.debug("auth", "could not decode credential expiry; using fallback lifetime");
-    return null;
-  }
-}
-
 export function persistSession(session: StoredSession | null): void {
   try {
     if (session) {
@@ -30,6 +15,15 @@ export function persistSession(session: StoredSession | null): void {
   }
 }
 
+function isValidSession(session: Partial<StoredSession>): session is StoredSession {
+  return (
+    !!session.user &&
+    typeof session.expiresAt === "number" &&
+    typeof session.token === "string" &&
+    session.token.length > 0
+  );
+}
+
 export function restoreSession(): StoredSession | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -38,16 +32,12 @@ export function restoreSession(): StoredSession | null {
       return null;
     }
     const session = JSON.parse(raw) as Partial<StoredSession>;
-    if (
-      !session.user ||
-      typeof session.expiresAt !== "number" ||
-      session.expiresAt < Date.now()
-    ) {
+    if (!isValidSession(session) || session.expiresAt < Date.now()) {
       logger.debug("auth", "ignoring invalid or expired stored session");
       persistSession(null);
       return null;
     }
-    return session as StoredSession;
+    return session;
   } catch {
     logger.warn("auth", "stored session unreadable; cleared");
     persistSession(null);
@@ -55,7 +45,25 @@ export function restoreSession(): StoredSession | null {
   }
 }
 
+/// Returns the stored server-minted JWT, or null when signed out/expired.
+/// The Google credential is never persisted — it lives only in memory
+/// for the duration of the sign-in exchange.
+export function getStoredToken(): string | null {
+  const session = restoreSession();
+  return session ? session.token : null;
+}
+
 export function clearSession(): void {
   persistSession(null);
 }
 
+export function isStoredSessionExpired(now: number = Date.now()): boolean {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return true;
+    const session = JSON.parse(raw) as Partial<StoredSession>;
+    return !isValidSession(session) || session.expiresAt <= now;
+  } catch {
+    return true;
+  }
+}

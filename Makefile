@@ -25,10 +25,10 @@ db-schema-prod: ## Apply backend/schema.sql to the PRODUCTION D1 database (remot
 	cd backend && npx wrangler d1 execute dashboard --remote --file=./schema.sql
 
 start-web: ## Run frontend server
-	npm run dev --prefix frontend
+	npm run dev --prefix frontend 
 
 start-mobile: ## Run mobile frontend server
 	npm run dev --prefix mobile
 
 dev: ## Run backend and frontend concurrently
-	@trap 'kill 0' EXIT; (cd backend && npx wrangler dev) & npm run dev --prefix frontend
+	@trap 'kill 0' EXIT; (cd backend && npx wrangler dev --local) & npm run dev --prefix frontend

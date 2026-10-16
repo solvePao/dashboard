@@ -6,6 +6,7 @@ import DevicePairingView from "./DevicePairingView.vue";
 const {
   shortCode,
   qrSvg,
+  expiresAt,
   user,
   authState,
   isAuthenticated,
@@ -27,6 +28,7 @@ const {
       :auth-state="authState"
       :qr-svg="qrSvg"
       :short-code="shortCode"
+      :expires-at="expiresAt"
       @refresh="createSession"
     />
   </div>

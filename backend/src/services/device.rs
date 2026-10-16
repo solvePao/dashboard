@@ -75,18 +75,40 @@ impl DeviceService {
     {
         let trimmed_code = v::normalize_code_or_session(code_or_session)?;
 
-        let session = store
-            .store_find_pending_session(&trimmed_code)
-            .await?
-            .ok_or_else(|| AppError::not_found("Pending session not found or expired."))?;
+        let pending = store.store_find_pending_session(&trimmed_code).await?;
+        let session = match pending {
+            Some(s) => s,
+            None => {
+                // Distinguish already-authorized (409) from unknown/expired
+                // (404) so a second scanner gets an honest conflict rather
+                // than a misleading not-found.
+                if let Ok(Some(existing)) =
+                    store.store_find_session_for_authorize(&trimmed_code).await
+                {
+                    if existing.status == "authorized" {
+                        return Err(AppError::new(
+                            "Session was already authorized.",
+                            409,
+                        ));
+                    }
+                }
+                return Err(AppError::not_found("Pending session not found or expired."));
+            }
+        };
 
         let device_token = generate_token().map_err(AppError::internal)?;
 
         let name = v::normalize_device_name(device_name);
 
-        store
+        let authorized = store
             .store_authorize_device_session(&session.session_id, user_id, &device_token, &name)
             .await?;
+        if !authorized {
+            return Err(AppError::new(
+                "Session was already authorized or expired.",
+                409,
+            ));
+        }
 
         Ok(AuthorizeDeviceResponse {
             status: "authorized".to_string(),

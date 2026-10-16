@@ -18,8 +18,6 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     }
 
     let res = Router::new()
-        // Health check
-        .get("/health", routes::health::health)
         // Auth & User routes
         .post_async("/api/auth/google", |req, ctx| async move {
             routes::auth::google_auth(req, ctx).await

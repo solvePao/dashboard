@@ -1,8 +1,9 @@
 use worker::*;
 
 use super::store::{D1Stores, UserStore};
-use crate::models::auth::{GoogleProfile, TokenInfo, User};
+use crate::models::auth::{GoogleProfile, LoginResponse, TokenInfo, User};
 use crate::models::error::{AppError, AppResult};
+use crate::utils::{mint_jwt, verify_jwt};
 
 /// Testable Google verifier seam. Production hits Google tokeninfo;
 /// tests substitute a fake.
@@ -42,6 +43,13 @@ impl AuthService {
             ));
         }
 
+        match info.iss.as_deref() {
+            Some("accounts.google.com") | Some("https://accounts.google.com") => {}
+            _ => {
+                return Err(AppError::unauthorized("Invalid Google ID token issuer."));
+            }
+        }
+
         let exp = info
             .exp
             .as_deref()
@@ -63,6 +71,7 @@ impl AuthService {
     }
 
     /// Verifies a Google ID token with Google's tokeninfo endpoint.
+    /// Only used by the sign-in route — no other route accepts Google tokens.
     pub async fn verify_google_id_token(env: &Env, id_token: &str) -> AppResult<GoogleProfile> {
         let client_id = env
             .secret("GOOGLE_CLIENT_ID")
@@ -97,60 +106,97 @@ impl AuthService {
         Self::validate_token_info(info, &client_id, Date::now().as_millis())
     }
 
-    /// Verifies the Google token and creates/updates the user profile in D1.
-    pub async fn login_with_google(env: &Env, db: &D1Database, id_token: &str) -> AppResult<User> {
+    /// Verifies the Google token, upserts the user in D1, and mints the
+    /// web session JWT the frontend must use from here on.
+    pub async fn login_with_google(
+        env: &Env,
+        db: &D1Database,
+        id_token: &str,
+    ) -> AppResult<LoginResponse> {
+        let secret = crate::utils::jwt_secret(env)?;
+        let now_secs = Date::now().as_millis() / 1000;
         let verifier = EnvVerifier(env);
-        Self::login_with_google_with(&D1Stores(db), &verifier, id_token).await
+        Self::login_with_google_with(&D1Stores(db), &verifier, id_token, &secret, now_secs).await
     }
 
     pub async fn login_with_google_with<S, V>(
         store: &S,
         verifier: &V,
         id_token: &str,
-    ) -> AppResult<User>
+        jwt_secret: &str,
+        now_secs: u64,
+    ) -> AppResult<LoginResponse>
     where
         S: UserStore + Sync,
         V: TokenVerifier + Sync,
     {
         let profile = verifier.verify_token(id_token).await?;
-        store
+        let user = store
             .store_upsert_user(
                 &profile.sub,
                 &profile.email,
                 profile.name.as_deref(),
                 profile.picture.as_deref(),
             )
-            .await
+            .await?;
+        let token = mint_jwt(&user.google_sub, user.id, jwt_secret, now_secs)
+            .map_err(AppError::internal)?;
+        Ok(LoginResponse {
+            user,
+            token,
+            expires_at: now_secs
+                .saturating_add(crate::common::JWT_EXPIRY_SECS)
+                .saturating_mul(1000),
+        })
     }
 
-    /// Unified authentication mechanism:
-    /// 1. Device token (mobile long-lived session)
-    /// 2. Google ID token (web session)
-    /// 3. Direct sub lookup (dev/testing)
+    /// Authenticates every non-sign-in route. Accepts exactly two tokens:
+    ///
+    /// 1. The server-minted web session JWT (HS256).
+    /// 2. A mobile device token (long-lived pairing token).
+    ///
+    /// Google ID tokens and raw `google_sub` values are rejected here —
+    /// a `sub` alone proves nothing, so it must never authenticate.
     pub async fn authenticate(token: &str, env: &Env, db: &D1Database) -> AppResult<User> {
-        let verifier = EnvVerifier(env);
-        Self::authenticate_with(&D1Stores(db), &verifier, token).await
+        // Fail closed: a missing/short secret is 503, never a silent skip of
+        // the JWT path (which would hide misconfiguration as 401s).
+        let secret = crate::utils::jwt_secret(env)?;
+        let now_secs = Date::now().as_millis() / 1000;
+        Self::authenticate_with(&D1Stores(db), token, &secret, now_secs).await
     }
 
-    pub async fn authenticate_with<S, V>(store: &S, verifier: &V, token: &str) -> AppResult<User>
+    pub async fn authenticate_with<S>(
+        store: &S,
+        token: &str,
+        jwt_secret: &str,
+        now_secs: u64,
+    ) -> AppResult<User>
     where
         S: UserStore + Sync,
-        V: TokenVerifier + Sync,
     {
-        // 1. Try active device token
-        if let Ok(Some(user)) = store.store_get_user_by_device_token(token).await {
-            return Ok(user);
+        // Fail closed when the server secret is missing/short: JWTs cannot be
+        // verified, so every request fails with 503 instead of silently
+        // degrading to device-credential-only (which masks misconfiguration).
+        if jwt_secret.len() < crate::common::MIN_JWT_SECRET_LEN {
+            return Err(AppError::service_unavailable(
+                "Server auth is not configured.",
+            ));
         }
-
-        // 2. Try Google ID token
-        if let Ok(profile) = verifier.verify_token(token).await {
-            if let Ok(Some(user)) = store.store_get_user_by_sub(&profile.sub).await {
-                return Ok(user);
+        // 1. Server-minted JWT. The `uid` cross-check binds the token to
+        // the exact user row it was issued for.
+        if let Ok(claims) = verify_jwt(token, jwt_secret, now_secs) {
+            if let Ok(Some(user)) = store.store_get_user_by_sub(&claims.sub).await {
+                if user.id == claims.uid {
+                    return Ok(user);
+                }
             }
+            return Err(AppError::unauthorized(
+                "Invalid or expired Authorization token.",
+            ));
         }
 
-        // 3. Fallback direct sub lookup (useful for local development/testing)
-        if let Ok(Some(user)) = store.store_get_user_by_sub(token).await {
+        // 2. Mobile device token.
+        if let Ok(Some(user)) = store.store_get_user_by_device_token(token).await {
             return Ok(user);
         }
 

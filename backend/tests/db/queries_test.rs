@@ -28,7 +28,12 @@ fn device_sql_builders() {
     assert!(p.contains("pending"));
     assert!(p.contains(SQL_NOW));
     assert!(insert_device_token_sql().contains(TOKEN_EXPIRY_SQL));
-    assert!(mark_session_authorized_sql().contains("'authorized'"));
+    let authz = mark_session_authorized_sql();
+    assert!(authz.contains("'authorized'"));
+    // Concurrent losers must affect 0 rows, never overwrite the winner.
+    assert!(authz.contains("status = 'pending'"));
+    // Re-creating an authorized session must not flip it back to pending.
+    assert!(up.contains("!= 'authorized'"));
     let d = get_user_devices_sql();
     assert!(d.contains("device_tokens"));
     assert!(d.contains("ORDER BY created_at DESC"));
@@ -42,7 +47,7 @@ fn normalize_lookup_key_lowercases() {
 
 fn memory_db() -> rusqlite::Connection {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
-    conn.execute_batch(include_str!("../schema.sql")).unwrap();
+    conn.execute_batch(include_str!("../../schema.sql")).unwrap();
     conn
 }
 

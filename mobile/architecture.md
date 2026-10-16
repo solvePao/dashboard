@@ -7,7 +7,7 @@ The mobile dashboard is a dedicated, landscape-oriented Single-Page Application 
 Designed to run on mobile devices or dedicated companion displays, the application pairs with the web dashboard via 128-character hexadecimal cryptographic session tokens, backend-rendered SVG QR codes, and 6-character short pairing codes. Once authorized, it acquires a persistent 6-month access token for continuous API communication.
 
 The codebase enforces strict separation of concerns:
-- **Domain Types (`src/types/`)**: Contract definitions for device auth, session status, layout, and health.
+- **Domain Types (`src/types/`)**: Contract definitions for device auth, session status, and layout.
 - **API Network Layer (`src/api/`)**: Centralized HTTP client and typed pairing endpoints.
 - **Services Layer (`src/services/`)**: Cryptographic session generator and `localStorage` token storage driver.
 - **Composables Layer (`src/composables/`)**: Reactive state controllers managing pairing state, orientation lock, and theme.
@@ -33,21 +33,18 @@ mobile/
     │
     ├── types/                     # Strongly typed domain models & API contracts
     │   ├── auth.ts                # UserProfile, AuthState, SessionResponse, CheckAuthResponse, MeResponse
-    │   ├── layout.ts              # SplitRatio ("50-50" | "30-70" | "70-30")
-    │   └── health.ts              # HealthResponse
+    │   └── layout.ts              # SplitRatio ("50-50" | "30-70" | "70-30")
     │
     ├── api/                       # Centralized REST network layer
     │   ├── client.ts              # Typed fetch client with ApiError and JSON handling
-    │   ├── deviceAuthApi.ts       # Session creation, auth checking, and /api/auth/me verification
-    │   └── healthApi.ts           # Backend health check endpoint (/health)
+    │   └── deviceAuthApi.ts       # Session creation, auth checking, and /api/auth/me verification
     │
     ├── services/                  # Non-reactive business logic & utilities
     │   ├── crypto.ts              # 128-hex secure random session ID generator (crypto.getRandomValues)
     │   └── deviceStorage.ts       # LocalStorage driver for mobile device token persistence
     │
     ├── composables/               # Reactive state controllers
-    │   ├── useDeviceAuth.ts       # Pairing lifecycle, token verification, and reactive status
-    │   ├── useHealth.ts           # Backend connectivity polling
+    │   ├── useDeviceAuth.ts       # Pairing lifecycle, token restore, and reactive status
     │   ├── useOrientationLock.ts  # Screen orientation lock and fullscreen management
     │   └── useTheme.ts            # Light/Dark/System theme switcher with storage sync
     │
@@ -59,7 +56,6 @@ mobile/
     │   ├── DeviceAuthCard.vue     # Right panel coordinating pairing view & authorized profile
     │   ├── DevicePairingView.vue  # SVG QR code display, 6-char code badge, and copy button
     │   ├── DeviceAuthorizedView.vue# Authorized profile avatar, name, email, and disconnect button
-    │   ├── BottomNavbar.vue       # Status indicator pill showing backend connection & release
     │   └── ThemeToggle.vue        # Dropdown / button toggling light, dark, or system mode
     │
     ├── styles/                    # Decoupled stylesheets
@@ -87,7 +83,6 @@ flowchart TD
         Summary["DeviceLinkedSummary.vue"]
         PairView["DevicePairingView.vue"]
         AuthView["DeviceAuthorizedView.vue"]
-        BottomNav["BottomNavbar.vue"]
         TToggle["ThemeToggle.vue"]
     end
 
@@ -103,14 +98,13 @@ flowchart TD
     subgraph ComposablesLayer["Composables Layer (src/composables/)"]
         useDeviceAuth["useDeviceAuth()"]
         useOrientationLock["useOrientationLock()"]
-        useHealth["useHealth()"]
         useTheme["useTheme()"]
     end
 
     App --> useDeviceAuth
+    App --> useOrientationLock
     InstrCard --> useDeviceAuth
     AuthCard --> useDeviceAuth
-    BottomNav --> useHealth
     TToggle --> useTheme
 
     subgraph ServicesLayer["Services Layer (src/services/)"]
@@ -120,20 +114,17 @@ flowchart TD
 
     subgraph APILayer["REST API Layer (src/api/)"]
         DeviceAuthAPI["deviceAuthApi.ts\n(createDeviceSessionApi, checkDeviceAuthApi, fetchMeApi)"]
-        HealthAPI["healthApi.ts\n(fetchHealthApi)"]
         Client["client.ts\n(apiClient, ApiError)"]
     end
 
     useDeviceAuth --> CryptoService
     useDeviceAuth --> DeviceStorage
     useDeviceAuth --> DeviceAuthAPI
-    useHealth --> HealthAPI
 
     DeviceAuthAPI --> Client
-    HealthAPI --> Client
 
     subgraph Backend["Backend Worker (Cloudflare D1)"]
-        Worker["/api/auth/device/session\n/api/auth/device/check\n/api/auth/me\n/health"]
+        Worker["/api/auth/device/session\n/api/auth/device/check\n/api/auth/me"]
     end
 
     Client --> Worker
@@ -149,7 +140,6 @@ flowchart TD
      - `CheckAuthResponse`: `status`, `token`, `user`.
      - `MeResponse`: `user`.
    - **`layout.ts`**: `SplitRatio` union (`"50-50" | "30-70" | "70-30"`).
-   - **`health.ts`**: `HealthResponse` (`status`, `release`, `now`).
 
 2. **`src/api/` (Network Layer)**
    - **`client.ts`**: Centralized HTTP fetch client reading `VITE_API_URL`, applying JSON content type headers, verifying response status, and normalizing errors.
@@ -157,22 +147,20 @@ flowchart TD
      - `createDeviceSessionApi(sessionId)`: Calls `POST /api/auth/device/session`.
      - `checkDeviceAuthApi(sessionId)`: Calls `POST /api/auth/device/check`.
      - `fetchMeApi(token)`: Calls `GET /api/auth/me` with `Authorization: Bearer <token>`.
-   - **`healthApi.ts`**: `fetchHealthApi()` calling `GET /health`.
 
 3. **`src/services/` (Business Logic & Driver Layer)**
    - **`crypto.ts`**: Uses `crypto.getRandomValues(new Uint8Array(64))` to generate a 128-hex random string matching backend cryptographic requirements.
    - **`deviceStorage.ts`**: Reads, writes, and removes `dashboard.mobile.device_token` in `localStorage` with fail-safe error handling.
 
 4. **`src/composables/` (Reactive Controllers)**
-   - **`useDeviceAuth.ts`**: Manages the full pairing lifecycle. Computes the 6-character `shortCode`, tracks `authState`, checks for existing tokens via `restoreExistingToken`, initializes sessions via `createSession`, polls status via `checkAuth`, and cleans up tokens via `disconnect`.
+   - **`useDeviceAuth.ts`**: Manages the full pairing lifecycle. Displays the backend's canonical `short_code` (with a local `deriveShortCode` fallback), tracks `authState`, restores saved tokens via `restoreExistingToken` (clears storage only on 401/403; keeps the token and offers retry on network errors), initializes sessions via `createSession`, re-verifies saved tokens first inside `checkAuth`, and cleans up tokens via `disconnect`.
    - **`useOrientationLock.ts`**: Monitors screen orientation and document fullscreen state. Requests `screen.orientation.lock("landscape")` when supported and provides `toggleFullscreen`.
-   - **`useHealth.ts`**: Polls backend connectivity every 2000ms.
    - **`useTheme.ts`**: Controls theme switching and syncs with OS preference.
 
 5. **`src/components/` (UI Presentation Layer)**
    - **`HorizontalSplitLayout.vue`**: Configurable dual-pane layout maintaining responsive width ratios and safe-area padding.
    - **`DeviceInstructionsCard.vue`**: Left pane showing `DeviceLinkedSummary` if authorized, or `DevicePairingSteps` if unlinked, with a Check for Auth button.
-   - **`DeviceAuthCard.vue`**: Right pane displaying `DeviceAuthorizedView` if linked, or `DevicePairingView` showing the SVG QR code and 6-char pairing code.
+   - **`DeviceAuthCard.vue`**: Right pane displaying `DeviceAuthorizedView` if linked, or `DevicePairingView` showing the QR code (backend SVG rendered through `<img>` so embedded scripts cannot execute), the canonical 6-char pairing code, and a live countdown from `expires_at`. The expired overlay takes precedence over the QR image; error/idle states get their own retry/placeholder blocks.
 
 6. **`src/styles/` (Modular Styling)**
    - **`theme.css`**: Tailwind CSS v4 color tokens and dark mode overrides.
@@ -200,10 +188,13 @@ sequenceDiagram
             Backend-->>API: { user: {...} }
             API-->>Auth: user data
             Auth->>Auth: authState = "authorized"
-        else Token Expired/Invalid
-            Backend-->>API: 401 Unauthorized
+        else Token Rejected (401/403)
+            Backend-->>API: 401/403
             Auth->>Storage: removeStoredDeviceToken()
             Auth->>Auth: createSession()
+        else Backend Unreachable (network/5xx)
+            Auth->>Auth: keep token, authState = "error"
+            Auth->>Auth: createSession() for pairing display, retry via Check for Auth
         end
     else No Token Found
         Auth->>Auth: createSession()
@@ -228,6 +219,9 @@ sequenceDiagram
 ```bash
 # Type check and build production bundle
 npm run build
+
+# Type check only (no emit)
+npm run typecheck
 
 # Start local development server (port 5174)
 npm run dev

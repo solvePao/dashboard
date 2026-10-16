@@ -1,6 +1,6 @@
 use backend::common::{
     ALLOWED_HEADERS, ALLOWED_METHODS, CORS_MAX_AGE, DB_BINDING_NAME, DEFAULT_DEVICE_NAME,
-    DEFAULT_ORIGINS, SESSION_ID_HEX_LEN, SHORT_CODE_LEN, SQL_NOW,
+    DEFAULT_ORIGINS, FAILED_AUTHORIZE_DELAY_SECS, SESSION_ID_HEX_LEN, SHORT_CODE_LEN, SQL_NOW,
 };
 use backend::db::helper::text_or_null;
 use worker::D1Type;
@@ -16,6 +16,16 @@ fn common_constants_match_contract() {
     assert_eq!(CORS_MAX_AGE, "86400");
     assert!(!SQL_NOW.is_empty());
     assert_eq!(DEFAULT_ORIGINS.len(), 4);
+    assert_eq!(FAILED_AUTHORIZE_DELAY_SECS, 5);
+}
+
+#[test]
+fn user_id_param_binds_and_rejects_overflow() {
+    match backend::db::helper::user_id_param(42) {
+        Ok(D1Type::Integer(n)) => assert_eq!(n, 42),
+        _ => panic!("expected integer"),
+    }
+    assert!(backend::db::helper::user_id_param(i64::from(i32::MAX) + 1).is_err());
 }
 
 #[test]

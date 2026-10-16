@@ -28,8 +28,8 @@ watch(isDark, renderButton);
 </script>
 
 <template>
-  <div>
-    <div ref="buttonEl"></div>
+  <div class="flex items-center" style="color-scheme: light;">
+    <div ref="buttonEl" style="color-scheme: light;"></div>
     <p v-if="!googleClientId" class="py-1 text-xs text-muted-foreground">
       Google login is not configured.
     </p>

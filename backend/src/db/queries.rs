@@ -36,11 +36,16 @@ pub fn touch_device_token_sql() -> String {
 }
 
 pub fn upsert_device_session_sql() -> String {
+    // The WHERE guard is load-bearing: re-creating an already-authorized
+    // session must never flip it back to 'pending' (that would reopen a
+    // finished pairing). Authorized rows keep their state; only
+    // pending/expired rows are reset.
     format!(
         "INSERT INTO device_sessions (session_id, short_code, status, expires_at, created_at, updated_at) \
          VALUES (?1, ?2, 'pending', {SESSION_EXPIRY_SQL}, {SQL_NOW}, {SQL_NOW}) \
          ON CONFLICT(session_id) DO UPDATE SET short_code = excluded.short_code, status = 'pending', \
-         expires_at = {SESSION_EXPIRY_SQL}, updated_at = {SQL_NOW}"
+         expires_at = {SESSION_EXPIRY_SQL}, updated_at = {SQL_NOW} \
+         WHERE device_sessions.status != 'authorized'"
     )
 }
 
@@ -67,6 +72,17 @@ pub fn find_pending_session_sql() -> String {
     )
 }
 
+/// Session lookup without a status filter, used only to distinguish an
+/// already-authorized session (409) from unknown/expired (404) after the
+/// pending lookup misses.
+pub fn find_session_for_authorize_sql() -> String {
+    "SELECT session_id, short_code, status, user_id, device_token, created_at, expires_at, updated_at \
+     FROM device_sessions \
+     WHERE (session_id = ?1 OR lower(short_code) = ?2) \
+     ORDER BY created_at DESC LIMIT 1"
+        .to_string()
+}
+
 pub fn insert_device_token_sql() -> String {
     format!(
         "INSERT INTO device_tokens (token, user_id, device_name, expires_at, created_at, last_used_at) \
@@ -75,9 +91,12 @@ pub fn insert_device_token_sql() -> String {
 }
 
 pub fn mark_session_authorized_sql() -> String {
+    // Guard is load-bearing: only a pending, unexpired session may transition
+    // to authorized. Concurrent authorizers serialize on this row; the loser
+    // affects 0 rows and must receive 409, never overwrite the winner.
     format!(
         "UPDATE device_sessions SET status = 'authorized', user_id = ?1, device_token = ?2, updated_at = {SQL_NOW} \
-         WHERE session_id = ?3"
+         WHERE session_id = ?3 AND status = 'pending' AND expires_at > {SQL_NOW}"
     )
 }
 
@@ -93,3 +112,4 @@ pub fn get_user_devices_sql() -> String {
 pub fn normalize_session_lookup_key(code_or_session_id: &str) -> String {
     code_or_session_id.to_lowercase()
 }
+

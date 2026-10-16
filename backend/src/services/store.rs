@@ -33,13 +33,17 @@ pub trait DeviceStore {
         &self,
         code_or_session_id: &str,
     ) -> AppResult<Option<DeviceSession>>;
+    async fn store_find_session_for_authorize(
+        &self,
+        code_or_session_id: &str,
+    ) -> AppResult<Option<DeviceSession>>;
     async fn store_authorize_device_session(
         &self,
         session_id: &str,
         user_id: i64,
         device_token: &str,
         device_name: &str,
-    ) -> AppResult<()>;
+    ) -> AppResult<bool>;
     async fn store_get_user_devices(&self, user_id: i64) -> AppResult<Vec<DeviceToken>>;
     async fn store_revoke_device_token(&self, user_id: i64, token: &str) -> AppResult<bool>;
 }
@@ -106,13 +110,22 @@ impl DeviceStore for D1Stores<'_> {
             .map_err(|_| AppError::bad_gateway("Database error."))
     }
 
+    async fn store_find_session_for_authorize(
+        &self,
+        code_or_session_id: &str,
+    ) -> AppResult<Option<DeviceSession>> {
+        db::find_session_for_authorize(self.0, code_or_session_id)
+            .await
+            .map_err(|_| AppError::bad_gateway("Database error."))
+    }
+
     async fn store_authorize_device_session(
         &self,
         session_id: &str,
         user_id: i64,
         device_token: &str,
         device_name: &str,
-    ) -> AppResult<()> {
+    ) -> AppResult<bool> {
         db::authorize_device_session(self.0, session_id, user_id, device_token, device_name)
             .await
             .map_err(|_| AppError::bad_gateway("Failed to authorize device session."))
@@ -130,3 +143,4 @@ impl DeviceStore for D1Stores<'_> {
             .map_err(|_| AppError::bad_gateway("Failed to revoke device."))
     }
 }
+

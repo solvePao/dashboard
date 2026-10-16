@@ -1,5 +1,6 @@
 import { computed, ref } from "vue";
 import { logger } from "../lib/logger";
+import { ApiError } from "../api/client";
 import {
   createDeviceSessionApi,
   checkDeviceAuthApi,
@@ -14,21 +15,29 @@ import {
 import type { UserProfile, AuthState } from "../types/auth";
 
 export type { UserProfile, AuthState };
-export { generate128Hex };
 
 const sessionId = ref<string>("");
+const shortCode = ref<string>("");
 const qrSvg = ref<string>("");
 const expiresAt = ref<string>("");
 const user = ref<UserProfile | null>(null);
-const deviceToken = ref<string | null>(null);
 const authState = ref<AuthState>("idle");
 const statusMessage = ref<string>("");
 
-export function useDeviceAuth() {
-  const shortCode = computed(() => {
-    return sessionId.value ? sessionId.value.slice(0, 6).toUpperCase() : "";
-  });
+/** Fallback display pairing code when the backend omits short_code. */
+export function deriveShortCode(id: string): string {
+  return id ? id.slice(0, 6).toUpperCase() : "";
+}
 
+/**
+ * True only when the error proves the saved token was rejected (vs. the
+ * backend being unreachable). Network failures must NOT clear the token.
+ */
+export function shouldClearStoredToken(err: unknown): boolean {
+  return err instanceof ApiError && (err.status === 401 || err.status === 403);
+}
+
+export function useDeviceAuth() {
   const isAuthenticated = computed(() => authState.value === "authorized" && !!user.value);
 
   async function restoreExistingToken(): Promise<boolean> {
@@ -41,15 +50,21 @@ export function useDeviceAuth() {
 
       const body = await fetchMeApi(stored);
       user.value = body.user;
-      deviceToken.value = stored;
       authState.value = "authorized";
       statusMessage.value = "Device is connected and authenticated";
       logger.info("auth", "Restored session with device token", { userId: body.user.id });
       return true;
-    } catch {
-      logger.warn("auth", "Saved token invalid or expired");
-      removeStoredDeviceToken();
-      deviceToken.value = null;
+    } catch (err) {
+      if (shouldClearStoredToken(err)) {
+        logger.warn("auth", "Saved token rejected; clearing");
+        removeStoredDeviceToken();
+      } else {
+        const message = err instanceof Error ? err.message : "Network error occurred";
+        logger.warn("auth", "Token verification unreachable; keeping saved token", message);
+        authState.value = "error";
+        statusMessage.value =
+          "Cannot reach the backend. Your saved login was kept — tap Check for Auth to retry.";
+      }
       return false;
     }
   }
@@ -58,6 +73,10 @@ export function useDeviceAuth() {
     try {
       authState.value = "loading";
       statusMessage.value = "Generating session ID...";
+      sessionId.value = "";
+      shortCode.value = "";
+      qrSvg.value = "";
+      expiresAt.value = "";
 
       const newSessionId = generate128Hex();
       sessionId.value = newSessionId;
@@ -65,13 +84,14 @@ export function useDeviceAuth() {
       const body = await createDeviceSessionApi(newSessionId);
 
       sessionId.value = body.session_id;
+      shortCode.value = body.short_code || deriveShortCode(body.session_id);
       qrSvg.value = body.qr_svg;
       expiresAt.value = body.expires_at;
       authState.value = "pending";
       statusMessage.value = "Scan QR code or enter pairing code on the web dashboard.";
       logger.info("auth", "Device pairing session created", {
         sessionId: body.session_id.slice(0, 8),
-        shortCode: body.short_code,
+        shortCode: shortCode.value,
       });
     } catch (err) {
       authState.value = "error";
@@ -83,12 +103,24 @@ export function useDeviceAuth() {
 
   async function init(): Promise<void> {
     const restored = await restoreExistingToken();
-    if (!restored) {
-      await createSession();
+    if (restored) return;
+    await createSession();
+    if (getStoredDeviceToken()) {
+      // Verification failed without rejecting the token (e.g. offline at
+      // startup): the pairing session is ready, but the saved login is kept
+      // and can be re-verified via Check for Auth.
+      statusMessage.value =
+        "Cannot reach the backend. Your saved login was kept — tap Check for Auth to retry.";
     }
   }
 
   async function checkAuth(): Promise<void> {
+    // A saved-but-unverified token (e.g. offline at startup) is re-verified
+    // first so the user has a retry path through the existing button.
+    if (!isAuthenticated.value && getStoredDeviceToken()) {
+      if (await restoreExistingToken()) return;
+    }
+
     if (!sessionId.value) {
       await createSession();
       return;
@@ -104,7 +136,6 @@ export function useDeviceAuth() {
 
       if (body.status === "authorized" && body.token && body.user) {
         user.value = body.user;
-        deviceToken.value = body.token;
         setStoredDeviceToken(body.token);
         authState.value = "authorized";
         statusMessage.value = "Successfully authorized!";
@@ -129,7 +160,6 @@ export function useDeviceAuth() {
     try {
       removeStoredDeviceToken();
       user.value = null;
-      deviceToken.value = null;
       authState.value = "idle";
       statusMessage.value = "";
       logger.info("auth", "Device disconnected");
@@ -145,7 +175,6 @@ export function useDeviceAuth() {
     qrSvg,
     expiresAt,
     user,
-    deviceToken,
     authState,
     statusMessage,
     isAuthenticated,

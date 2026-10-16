@@ -9,6 +9,7 @@ export const googleClientId =
   rawGoogleClientId === PLACEHOLDER_CLIENT_ID ? "" : rawGoogleClientId;
 
 let gisLoadPromise: Promise<void> | null = null;
+let initializedClientId: string | null = null;
 
 export function loadGisScript(): Promise<void> {
   if (typeof window === "undefined") {
@@ -48,6 +49,12 @@ export async function renderGoogleButton(
     throw new Error("Google login is not configured (missing VITE_GOOGLE_CLIENT_ID).");
   }
 
+  const desiredTheme = options?.dark ? "filled_black" : "outline";
+  if (element.dataset.renderedTheme === desiredTheme && element.children.length > 0) {
+    logger.debug("auth", "Google button already rendered with desired theme", { theme: desiredTheme });
+    return;
+  }
+
   await loadGisScript();
   const id = window.google?.accounts?.id;
   if (!id) {
@@ -55,14 +62,20 @@ export async function renderGoogleButton(
     throw new Error("Google Identity Services failed to initialize.");
   }
 
-  id.initialize({
-    client_id: googleClientId,
-    callback,
-  });
+  if (initializedClientId !== googleClientId) {
+    id.initialize({
+      client_id: googleClientId,
+      callback,
+      use_fedcm_for_button: true,
+    });
+    initializedClientId = googleClientId;
+  }
 
   element.innerHTML = "";
+  element.style.colorScheme = "light";
+  element.dataset.renderedTheme = desiredTheme;
   id.renderButton(element, {
-    theme: options?.dark ? "filled_black" : "outline",
+    theme: desiredTheme,
     size: "large",
     text: "signin_with",
     shape: "pill",
