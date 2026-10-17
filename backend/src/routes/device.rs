@@ -5,7 +5,9 @@ use crate::models::device::{
     RevokeResponse,
 };
 use crate::services::{AuthService, DeviceService};
-use crate::utils::{json_error, json_ok};
+use crate::utils::{
+    allowed_origins, is_origin_allowed, json_error, json_ok, parse_cookie_header, request_origin,
+};
 use super::{get_db, validation};
 
 pub async fn create_session(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -96,9 +98,43 @@ pub async fn check_session(mut req: Request, ctx: RouteContext<()>) -> Result<Re
     }
 }
 
+/// Extracts WebSocket upgrade headers from an incoming request, builds a fresh
+/// subrequest targeting the specified internal Durable Object route, and dispatches it.
+/// Rebuilding the request is necessary because the incoming request carries immutable
+/// headers which Cloudflare Workers refuses to forward directly into a subrequest.
+async fn forward_websocket_to_stub(
+    req: &Request,
+    stub: &Stub,
+    target_url: &str,
+    error_msg: &'static str,
+) -> Result<Response> {
+    let headers = Headers::new();
+    for name in [
+        "upgrade",
+        "connection",
+        "sec-websocket-key",
+        "sec-websocket-version",
+        "sec-websocket-protocol",
+        "sec-websocket-extensions",
+    ] {
+        if let Ok(Some(value)) = req.headers().get(name) {
+            let _ = headers.set(name, &value);
+        }
+    }
+    let mut init = RequestInit::new();
+    init.method = Method::Get;
+    init.headers = headers;
+    let do_req = match Request::new_with_init(target_url, &init) {
+        Ok(r) => r,
+        Err(_) => return json_error(error_msg, 502),
+    };
+
+    stub.fetch_with_request(do_req).await
+}
+
 /// Proxies the mobile WebSocket upgrade to the session's PairingObject.
 ///
-/// No auth token is required: the `session_id` is a 128-char random hex string,
+/// No auth token is required: the `session_id` is a 32-char random hex string,
 /// making it computationally unguessable. Accepted trade-off: anyone who can observe
 /// the session_id (e.g. via QR interception) can connect and receive the push.
 /// The PairingObject's Wipe alarm (2 min) closes the replay window once the result
@@ -120,31 +156,7 @@ pub async fn pairing_socket(req: Request, ctx: RouteContext<()>) -> Result<Respo
         Err(_) => return json_error("Failed to reach pairing session.", 502),
     };
 
-    // The incoming request carries immutable headers, which the runtime
-    // refuses to forward into a subrequest as-is ("Can't modify immutable
-    // headers"). Rebuild a fresh upgrade request for the object instead.
-    let headers = Headers::new();
-    for name in [
-        "upgrade",
-        "connection",
-        "sec-websocket-key",
-        "sec-websocket-version",
-        "sec-websocket-protocol",
-        "sec-websocket-extensions",
-    ] {
-        if let Ok(Some(value)) = req.headers().get(name) {
-            let _ = headers.set(name, &value);
-        }
-    }
-    let mut init = RequestInit::new();
-    init.method = Method::Get;
-    init.headers = headers;
-    let do_req = match Request::new_with_init("https://pairing/ws", &init) {
-        Ok(r) => r,
-        Err(_) => return json_error("Failed to reach pairing session.", 502),
-    };
-
-    stub.fetch_with_request(do_req).await
+    forward_websocket_to_stub(&req, &stub, "https://pairing/ws", "Failed to reach pairing session.").await
 }
 
 /// Proxies the mobile device WebSocket upgrade to the device's DeviceObject.
@@ -175,28 +187,50 @@ pub async fn device_socket(req: Request, ctx: RouteContext<()>) -> Result<Respon
         Err(_) => return json_error("Failed to reach device session.", 502),
     };
 
-    let headers = Headers::new();
-    for name in [
-        "upgrade",
-        "connection",
-        "sec-websocket-key",
-        "sec-websocket-version",
-        "sec-websocket-protocol",
-        "sec-websocket-extensions",
-    ] {
-        if let Ok(Some(value)) = req.headers().get(name) {
-            let _ = headers.set(name, &value);
-        }
+    forward_websocket_to_stub(&req, &stub, "https://device/ws", "Failed to reach device session.").await
+}
+
+/// Proxies the web dashboard WebSocket upgrade to the user's
+/// `DevicesHubObject`. Browsers cannot send `Authorization` on a
+/// WebSocket handshake, so the hub authenticates from the HttpOnly
+/// session cookie planted at login. Because cookies are ambient, the
+/// `Origin` must match a configured frontend origin (CSWSH guard).
+/// The hub is addressed by the server-derived user id, never by any
+/// client-supplied identifier.
+pub async fn devices_live(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let allowed = allowed_origins(&ctx.env);
+    let origin = request_origin(&req);
+    if !is_origin_allowed(origin.as_deref(), &allowed) {
+        return json_error("Origin not allowed.", 403);
     }
-    let mut init = RequestInit::new();
-    init.method = Method::Get;
-    init.headers = headers;
-    let do_req = match Request::new_with_init("https://device/ws", &init) {
-        Ok(r) => r,
-        Err(_) => return json_error("Failed to reach device session.", 502),
+
+    let cookie_header = req.headers().get("Cookie").unwrap_or(None);
+    let token = match parse_cookie_header(cookie_header.as_deref(), crate::common::SESSION_COOKIE_NAME) {
+        Some(t) => t,
+        None => return json_error("Missing session cookie.", 401),
     };
 
-    stub.fetch_with_request(do_req).await
+    let db = match get_db(&ctx) {
+        Ok(db) => db,
+        Err(err) => return err.to_response(),
+    };
+
+    let user = match AuthService::authenticate(&token, &ctx.env, &db).await {
+        Ok(u) => u,
+        Err(err) => return err.to_response(),
+    };
+
+    let namespace = match ctx.env.durable_object(crate::common::HUB_BINDING_NAME) {
+        Ok(ns) => ns,
+        Err(_) => return json_error("Failed to reach devices hub.", 502),
+    };
+
+    let stub = match namespace.get_by_name(&user.id.to_string()) {
+        Ok(s) => s,
+        Err(_) => return json_error("Failed to reach devices hub.", 502),
+    };
+
+    forward_websocket_to_stub(&req, &stub, "https://hub/ws", "Failed to reach devices hub.").await
 }
 
 pub async fn get_devices(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -245,7 +279,11 @@ pub async fn revoke_device(req: Request, ctx: RouteContext<()>) -> Result<Respon
         Err(err) => return err.to_response(),
     };
 
-    match DeviceService::revoke_device(&db, &ctx.env, user.id, &token_to_revoke).await {
+    // A caller deleting its own token (mobile Disconnect) is a
+    // self-disconnect; any other own-device deletion is a revocation.
+    let kind = validation::resolve_lifecycle_kind(&auth_token, &token_to_revoke);
+
+    match DeviceService::revoke_device(&db, &ctx.env, user.id, &token_to_revoke, kind).await {
         Ok(revoked) => json_ok(&RevokeResponse { revoked }),
         Err(err) => err.to_response(),
     }

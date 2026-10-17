@@ -12,7 +12,7 @@ pub fn generate_secure_token() -> std::result::Result<String, String> {
     Ok(hex_str)
 }
 
-pub fn is_valid_128_hex(s: &str) -> bool {
+pub fn is_valid_session_id_hex(s: &str) -> bool {
     s.len() == SESSION_ID_HEX_LEN && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 

@@ -1,7 +1,8 @@
+use backend::common::DeviceLifecycleKind;
 use backend::routes::validation::{
     require_bearer_header, require_check_session_id, require_credential,
     require_route_sub, require_route_token, require_session_id, require_sub_match,
-    resolve_code_or_session,
+    resolve_code_or_session, resolve_lifecycle_kind,
 };
 use backend::models::auth::GoogleAuthRequest;
 use backend::models::device::{AuthorizeDeviceRequest, CheckSessionRequest, CreateSessionRequest};
@@ -92,3 +93,23 @@ fn require_sub_match_and_route_sub() {
     assert_eq!(require_route_sub(None).unwrap_err().status, 400);
     assert_eq!(require_route_sub(Some("")).unwrap_err().status, 400);
 }
+
+#[test]
+fn resolve_lifecycle_kind_distinguishes_self_disconnect() {
+    // Caller's token matches token being revoked -> self-disconnect
+    assert_eq!(
+        resolve_lifecycle_kind("device-token-123", "device-token-123"),
+        DeviceLifecycleKind::Disconnected
+    );
+
+    // Caller is a different token (e.g. web session JWT or another device) -> revocation
+    assert_eq!(
+        resolve_lifecycle_kind("web-jwt-session", "device-token-123"),
+        DeviceLifecycleKind::Revoked
+    );
+    assert_eq!(
+        resolve_lifecycle_kind("device-token-A", "device-token-B"),
+        DeviceLifecycleKind::Revoked
+    );
+}
+

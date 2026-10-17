@@ -17,20 +17,21 @@ backend/
 ├── schema.sql
 ├── architecture.md
 └── src/
-    ├── common.rs              # Global configuration, constants, and SQL time expressions
+    ├── common.rs              # Global configuration, env constants, DeviceLifecycleKind enum, SQL time expressions
     ├── router.rs              # Worker entry point and router dispatch
     │
     ├── utils/                 # Reusable helper utilities
     │   ├── mod.rs             # Module declarations & re-exports
     │   ├── cors.rs            # CORS origins, request origin parser, preflight
+    │   ├── env.rs             # Typed environment variable and secret accessors
     │   ├── http.rs            # Bearer token extractor, JSON response helpers
-    │   ├── crypto.rs          # Cryptographic secure token generator, 128-hex validator
+    │   ├── crypto.rs          # Cryptographic secure token generator, 32-hex validator
     │   ├── jwt.rs             # HS256 session JWT mint/verify (pure, unit-tested)
     │   └── qr.rs              # Fast QR SVG renderer
     │
     ├── objects/               # Durable Objects
     │   ├── mod.rs             # Module declarations & re-exports
-    │   ├── device.rs          # DeviceObject: real-time WebSocket revocation push
+    │   ├── device.rs          # DeviceObject (revocation push) & DevicesHubObject (dashboard live hub)
     │   ├── pairing.rs         # PairingObject: pairing state, alarm, WebSocket push
     │   └── state.rs           # Pure pairing state machine & transition rules
     │
@@ -40,19 +41,18 @@ backend/
     │   ├── users.rs           # User lookup, upsert, and device-token JOIN queries
     │   └── devices.rs         # Pairing-code index, device token insert/delete, revocation
     │
-
     ├── models/                # Domain models, database structs, and request/response DTOs
     │   ├── mod.rs             # Module declarations
     │   ├── auth.rs            # User entity, Google OAuth profiles, DTOs
-    │   ├── device.rs          # PairingCode, PairingState, DeviceToken, and pairing/check DTOs
+    │   ├── device.rs          # PairingCode, PairingState, DeviceToken, HubEvent, and pairing/check DTOs
     │   └── error.rs           # AppError and AppResult
     │
     ├── services/              # Pure business logic layer
     │   ├── mod.rs             # Module declarations & re-exports
     │   ├── auth.rs            # AuthService (Google OAuth verification, unified auth, user lookups)
     │   ├── device.rs          # DeviceService (QR session creation, authorization, check, revoke push)
-    │   ├── pairing.rs         # DoPairingClient / DoDeviceNotifier (Worker → object stubs)
-    │   ├── store.rs           # PairingStore / PairingClient / DeviceNotifier seams
+    │   ├── pairing.rs         # DoPairingClient / DoDeviceNotifier / DoHubNotifier (Worker → object stubs)
+    │   ├── store.rs           # PairingStore / PairingClient / DeviceNotifier / HubNotifier seams
     │   └── validation.rs      # Pure input validation & normalization
     │
     └── routes/                # HTTP endpoint handlers
@@ -117,14 +117,18 @@ flowchart TD
 1. **`src/common.rs` (Constants & Configuration)**
    - Single source of truth for global configuration:
      - CORS settings (`DEFAULT_ORIGINS`, `ALLOWED_METHODS`, `ALLOWED_HEADERS`, `CORS_MAX_AGE`).
-     - Cloudflare D1 binding name (`DB_BINDING_NAME = "dashboard"`).
+     - Cloudflare D1 and Durable Object binding names (`DB_BINDING_NAME`, `PAIRING_BINDING_NAME`, `DEVICE_BINDING_NAME`, `HUB_BINDING_NAME`).
+     - Environment variable and secret names (`ENV_ENVIRONMENT`, `ENV_FRONTEND_ORIGINS`, `SECRET_GOOGLE_CLIENT_ID`, `JWT_SECRET_NAME`).
+     - `DeviceLifecycleKind` enum (`Authorized`, `Revoked`, `Disconnected`).
      - SQLite time expressions (`SQL_NOW`, `SESSION_EXPIRY_SQL`, `TOKEN_EXPIRY_SQL`).
-     - Session constraints (`SESSION_ID_HEX_LEN = 128`, `SHORT_CODE_LEN = 6`).
+     - Session constraints (`SESSION_ID_HEX_LEN = 32`, `SHORT_CODE_LEN = 6`).
 
 2. **`src/utils/` (Reusable Utilities Folder)**
    - **`cors.rs`**: `allowed_origins`, `request_origin`, `apply_cors`, `cors_preflight`.
+   - **`env.rs`**: Strongly typed environment variable and secret accessors (`is_production`, `get_environment`, `get_frontend_origins`, `get_google_client_id`).
    - **`http.rs`**: `bearer_token`, `json_ok`, `json_error`.
-   - **`crypto.rs`**: `generate_secure_token` (cryptographically secure random hex via `getrandom`), `is_valid_128_hex`.
+   - **`jwt.rs`**: `jwt_secret`, `generate_jwt`, `verify_jwt`.
+   - **`crypto.rs`**: `generate_secure_token` (cryptographically secure random hex via `getrandom`), `is_valid_session_id_hex`.
    - **`qr.rs`**: `generate_qr_svg` (fast_qr SVG renderer).
 
 3. **`src/db/` (Database Repository Folder)**
@@ -145,7 +149,7 @@ flowchart TD
      - `authenticate`: Unified authentication engine supporting server-minted session JWTs and mobile device tokens only.
      - `get_user_by_sub`: Retrieves user records by Google subject ID.
    - **`device.rs` (`DeviceService`)**:
-     - `create_session`: Validates 128-hex session IDs, generates QR code SVG, extracts short codes, and persists pending sessions.
+     - `create_session`: Validates 32-hex session IDs, generates QR code SVG, extracts short codes, and persists pending sessions.
      - `authorize_device`: Links pending sessions to authenticated users, issues 6-month device tokens, and updates session states.
      - `check_session`: Polling status inspection, returning device tokens upon authorization and detecting session expiration dynamically.
      - `get_user_devices`: Lists active devices for the user.
@@ -174,7 +178,7 @@ flowchart TD
 5. `AuthService::authenticate` accepts exactly two credentials: the session JWT (with `uid` cross-checked against the user row) or a mobile device token. Google ID tokens and raw `google_sub` values are rejected.
 
 ### Mobile QR Code Device Pairing
-1. Mobile app generates a 128-character hex session ID.
+1. Mobile app generates a 32-character hex session ID.
 2. Calls `POST /api/auth/device/session` with `{ "session_id": "<hex>" }`.
 3. Backend writes the slim D1 code index (`code -> session_id`, 2 minutes), initializes the session's `PairingObject` as `pending` with a 2-minute alarm, and returns the SVG QR code and 6-character shortcode.
 4. Mobile displays QR and opens `GET /api/auth/device/ws/:session_id` (hibernatable WebSocket proxied to the object). No polling and no tap needed; `POST /api/auth/device/check` remains as the reconnect/manual fallback (small circular button on mobile).
@@ -189,6 +193,11 @@ flowchart TD
 3. Backend authenticates the user, deletes the device token from D1 `device_tokens`, and pokes `DeviceObject` via `POST /revoke`.
 4. `DeviceObject` broadcasts `{"status": "revoked", "message": "Device access was revoked from the web dashboard."}` to the connected WebSocket and immediately closes the socket.
 5. Mobile receives the message, wipes `device_token` from `localStorage`, displays the revocation alert banner, and starts a fresh pairing session displaying a new QR code.
+
+### Mobile Self-Disconnect & Live Dashboard
+1. On mobile, **Disconnect Device** asks for confirmation, then sends the same `DELETE /api/devices/:token` with its own device token as bearer; the backend records this as `disconnected` (vs `revoked`) and shares the D1-first delete-and-notify path above. Mobile clears its token only after the backend confirms.
+2. After any authorize/revoke/disconnect, the Worker pokes the user's `DevicesHubObject` (`idFromName(user_id)`, binding `DEVICES_HUB`), which increments its stored `revision`, keeps `last_event`, and broadcasts to open dashboards.
+3. The web dashboard connects to `GET /api/devices/live`, authenticated by the `HttpOnly` session cookie set at login (with an `Origin` allowlist check), removes rows on `revoked`/`disconnected`, re-fetches on `authorized`, and resynchronizes via `revision`/`last_event` after a reconnect.
 
 ---
 
@@ -257,7 +266,7 @@ worker-build --release
 
 ### Current logic (inspected)
 
-- Mobile generates a 128-hex `session_id`, calls
+- Mobile generates a 32-hex `session_id`, calls
   `POST /api/auth/device/session`; backend derives the 6-char `short_code`
   from `session_id[..6]`, upserts a `pending` row in D1 `device_sessions`
   (15 min expiry, `schema.sql`), and returns QR SVG + `short_code`.
@@ -358,3 +367,158 @@ worker-build --release
   `PairingObject` + WebSocket push, slim D1 `pairing_codes` index,
   2-minute expiry, mobile auto-login with circular fallback button.
   The "Current logic (inspected)" above is the pre-change record.
+
+---
+
+## Mobile Self-Disconnect via Durable Objects (Draft)
+
+> Grill interview record. Status: **Draft** — no decision becomes Final
+> without explicit user acceptance. Provisional holder is this file
+> (`backend/architecture.md`), following the two grill records above;
+> `mobile/architecture.md` is the alternative target (to confirm).
+
+### Request
+
+- On mobile, tapping **Disconnect Device** should delete the device
+  from the backend using Cloudflare Durable Objects, and the frontend
+  should also be updated. Source: user, 2026-10-16.
+- Constraint: no new tests in this pass. Source: user, 2026-10-16.
+
+### Current logic (inspected)
+
+- Mobile disconnect is local-only: `useDeviceAuth.disconnect()`
+  (`mobile/src/composables/useDeviceAuth.ts`) closes the device
+  socket, removes `dashboard.mobile.device_token` from localStorage,
+  clears the user, and starts a fresh pairing session. It makes no
+  backend call, so the `device_tokens` row in D1 survives and the web
+  dashboard keeps listing the device.
+- Backend revocation already exists for the web-initiated path:
+  `DELETE /api/devices/:token` (`backend/src/routes/device.rs`)
+  authenticates via `AuthService::authenticate` — which already
+  accepts a mobile device token as well as the web JWT — then
+  `DeviceService::revoke_device` deletes the D1 row only when
+  `user_id` matches (`db/devices.rs` `revoke_device_token`), and on
+  success pokes the per-token `DeviceObject` (`POST /revoke` via
+  `DoDeviceNotifier`), which broadcasts
+  `{"status":"revoked", ...}`, closes its sockets, and wipes its
+  storage. The Durable Object cannot delete D1 rows; only the Worker
+  can. The object holds no durable state beyond live sockets today.
+- Web frontend (`frontend/`) has no live channel: it learns the device
+  list only from `GET /api/devices` on sign-in/authorize
+  (`useDevices.fetchDevices`). A mobile-initiated deletion is visible
+  there only on the next fetch, unless new push/polling is added.
+  When the web itself revokes, `useDevices.revokeDevice` removes the
+  row locally at once.
+
+### Settled
+
+- Q1 — "Frontend updated" means **live**: if the web dashboard is open
+  when the phone disconnects itself, the device row disappears without
+  a manual refresh or reload. A new push channel to the web is in
+  scope. Source: user reply `2`, 2026-10-16.
+- Direction — Login with the 6-char code, revoke, and disconnect
+  should live in **one logic module** rather than scattered logic.
+  Source: user, 2026-10-16.
+- Q2 — "One logic module" means **one backend device-lifecycle
+  module**: the existing backend device service is the single owner
+  of 6-char login, revoke, and disconnect, sharing one
+  delete-and-notify path; mobile and web keep only thin UI calls.
+  All code for this lifecycle should be structured in a similar
+  Rust module/package grouping. Source: user reply `1`, 2026-10-16.
+
+- Q2b — Live web channel is a **per-user hub**: one WebSocket per
+  signed-in user; the backend module pokes the hub on authorize,
+  revoke, and disconnect, and the open dashboard updates at once.
+  Needs one new Durable Object class and binding. Source: user
+  reply `1`, 2026-10-16.
+
+- Q2c — Module structure in Rust: **extend the existing layered
+  `device` modules in place** (`services/device.rs`,
+  `objects/device.rs`, `routes/device.rs`, `db/devices.rs`,
+  `models/device.rs`); the service module stays the single owner.
+  No feature-folder move and no single mega-file. Source: user
+  reply `1`, 2026-10-16.
+
+- Q3 — Endpoint and auth: **reuse `DELETE /api/devices/:token`**.
+  Mobile sends its own saved token as its bearer credential; the
+  existing authenticate + user-ownership check, D1 delete, and
+  `DeviceObject` poke are shared with web revoke. No new endpoint.
+  Source: user reply `1`, 2026-10-16.
+
+- Q4 — Ordering and notifications: **D1 delete first, then both
+  Durable Object pokes, best-effort**. The per-token `DeviceObject`
+  closes/wipes its sockets and the per-user hub emits a
+  device-removed event carrying the device identifier so the web
+  filters that row without re-fetching. A failed poke never undoes
+  the deletion. Source: user reply `1`, 2026-10-16.
+
+- Q5 — Failure semantics on mobile: **backend confirms first**.
+  Mobile clears its token and resets only after the delete confirms
+  (already-gone counts as confirmed); on network/5xx failure it stays
+  authorized, keeps its token, and shows a retry error. Source: user
+  reply `1`, 2026-10-16.
+- Proposal — Track lifecycle state in a Durable Object storage
+  field for efficiency. Source: user, 2026-10-16.
+- Q5b — Tracking field: **hub revision + last event only**. The
+  per-user hub storage keeps a `revision` counter incremented on
+  every login/revoke/disconnect and the `last_event` (kind, device
+  identifier, time); one small write per lifecycle event, no
+  per-request reads, D1 remains authoritative. On web reconnect a
+  revision gap triggers one re-fetch; the last event replays when
+  it is the only missed change. No per-device tombstone. Source:
+  user reply `1`, 2026-10-16.
+
+- Proposal — Use **cookies** for hub socket authentication.
+  Feasible: the browser sends cookies automatically on the
+  WebSocket handshake, and the Worker can validate the session
+  cookie before proxying to the hub. Source: user, 2026-10-16.
+- Q6 — Hub authentication: **HttpOnly cookie, hub-only**. Login
+  (`POST /api/auth/google`) also sets the session token as an
+  `HttpOnly` cookie; REST keeps the existing bearer header. The hub
+  route validates the cookie, derives the user server-side, checks
+  `Origin` against the configured frontend origins, then proxies
+  to that user's hub. Sign-out expires the cookie via a small
+  logout endpoint. Production cookie attributes (`SameSite=Lax`
+  same-site vs `None; Secure` cross-site) depend on the deployed
+  web/API domains, which the repo does not record — carried as a
+  deployment setting to confirm at implementation. Source: user
+  reply `1` (domain not specified), 2026-10-16.
+
+- Q7 — Confirmation UX: **confirm step first**. Tapping Disconnect
+  on mobile shows a confirmation ("You will need to scan a new QR
+  code to reconnect") before the backend delete runs. Source: user
+  reply `2`, 2026-10-16.
+
+- Q8 — Hub event coverage: **removals and additions**. The hub
+  announces authorized, revoked, and disconnected events; the web
+  filters the named row on removal and re-fetches on addition, and
+  the revision counter counts every lifecycle change. Source:
+  user reply `1`, 2026-10-16.
+
+- Q9 — Scope contract: **accepted** as presented in conversation
+  (in-scope backend/mobile/web changes, out-of-scope items, and the
+  five done-means conditions, with no new tests in this pass).
+  Source: user reply `accept`, 2026-10-16.
+
+### Unresolved
+
+- None. Decision tree exhausted. This section stays **Draft**
+  (Final only on later explicit user instruction).
+
+### Implementation
+
+- Implemented after user `go` (2026-10-16) per the accepted scope:
+  `DevicesHubObject` (per-user, `DEVICES_HUB` binding, migration
+  `v3`) storing only `revision` + `last_event`; `DeviceService`
+  announces `authorized` after commit and `revoked`/`disconnected`
+  after the D1-first delete in the shared `revoke_device` path;
+  `GET /api/devices/live` authenticates the hub socket from the
+  login `HttpOnly` cookie with an `Origin` allowlist check;
+  `POST /api/auth/logout` expires the cookie. Mobile disconnect is
+  backend-confirmed with a two-step confirmation on both Disconnect
+  buttons; the web dashboard applies hub removals live, re-fetches
+  on additions, and resynchronizes on revision gaps. Verified with
+  `cargo check`, `cargo clippy -- -D warnings`, the existing test
+  suite, both frontend builds, and a local-Worker probe covering
+  disconnect, authorize, revoke, hub auth guards, and logout. No
+  new tests were added in this pass, per instruction.

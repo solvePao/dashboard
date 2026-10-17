@@ -4,12 +4,13 @@ import { ApiError } from "../api/client";
 import {
   createDeviceSessionApi,
   checkDeviceAuthApi,
+  disconnectDeviceApi,
   fetchMeApi,
   pairingSocketUrl,
   deviceSocketUrl,
 } from "../api/deviceAuthApi";
 import type { CheckAuthResponse } from "../types/auth";
-import { generate128Hex } from "../services/crypto";
+import { generateSessionIdHex } from "../services/crypto";
 import {
   getStoredDeviceToken,
   setStoredDeviceToken,
@@ -26,6 +27,9 @@ const expiresAt = ref<string>("");
 const user = ref<UserProfile | null>(null);
 const authState = ref<AuthState>("idle");
 const statusMessage = ref<string>("");
+const isDisconnecting = ref<boolean>(false);
+const isConfirmingDisconnect = ref<boolean>(false);
+const disconnectError = ref<string>("");
 
 let pairingSocket: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -198,6 +202,8 @@ export function useDeviceAuth() {
   }
 
   async function createSession(): Promise<void> {
+    isConfirmingDisconnect.value = false;
+    disconnectError.value = "";
     closePairingSocket();
     closeDeviceSocket();
     try {
@@ -208,7 +214,7 @@ export function useDeviceAuth() {
       qrSvg.value = "";
       expiresAt.value = "";
 
-      const newSessionId = generate128Hex();
+      const newSessionId = generateSessionIdHex();
       sessionId.value = newSessionId;
 
       const body = await createDeviceSessionApi(newSessionId);
@@ -282,18 +288,63 @@ export function useDeviceAuth() {
     }
   }
 
+  /**
+   * Self-disconnect: the backend delete must confirm before anything
+   * local is cleared, so "disconnected" here always means "deleted on
+   * the backend". Already-gone responses (401/403/404) are the same
+   * end state and count as confirmed; network/5xx failures keep the
+   * session untouched and surface a retry message.
+   */
+  function requestDisconnect(): void {
+    disconnectError.value = "";
+    isConfirmingDisconnect.value = true;
+  }
+
+  function cancelDisconnect(): void {
+    if (isDisconnecting.value) return;
+    disconnectError.value = "";
+    isConfirmingDisconnect.value = false;
+  }
+
   async function disconnect(): Promise<void> {
-    try {
+    if (isDisconnecting.value) return;
+    disconnectError.value = "";
+    const token = getStoredDeviceToken();
+    if (!token) {
       closeDeviceSocket();
-      removeStoredDeviceToken();
       user.value = null;
       authState.value = "idle";
       statusMessage.value = "";
-      logger.info("auth", "Device disconnected");
+      isConfirmingDisconnect.value = false;
       await createSession();
-    } catch (err) {
-      logger.error("auth", "Disconnect error", err);
+      return;
     }
+
+    isDisconnecting.value = true;
+    try {
+      await disconnectDeviceApi(token);
+    } catch (err) {
+      const alreadyGone =
+        err instanceof ApiError && (err.status === 401 || err.status === 403 || err.status === 404);
+      if (!alreadyGone) {
+        disconnectError.value =
+          "Could not disconnect from the backend. Check your connection and try again.";
+        logger.error("auth", "Backend disconnect failed; staying connected", err);
+        isDisconnecting.value = false;
+        return;
+      }
+      logger.info("auth", "Device already deleted on backend; finishing disconnect");
+    }
+
+    closeDeviceSocket();
+    removeStoredDeviceToken();
+    user.value = null;
+    authState.value = "idle";
+    statusMessage.value = "";
+    isDisconnecting.value = false;
+    isConfirmingDisconnect.value = false;
+    logger.info("auth", "Device disconnected");
+    await createSession();
   }
 
   return {
@@ -304,10 +355,15 @@ export function useDeviceAuth() {
     user,
     authState,
     statusMessage,
+    isDisconnecting,
+    isConfirmingDisconnect,
+    disconnectError,
     isAuthenticated,
     init,
     createSession,
     checkAuth,
+    requestDisconnect,
+    cancelDisconnect,
     disconnect,
   };
 }

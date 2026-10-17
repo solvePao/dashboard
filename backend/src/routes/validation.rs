@@ -1,3 +1,4 @@
+use crate::common::DeviceLifecycleKind;
 use crate::models::device::{AuthorizeDeviceRequest, CheckSessionRequest, CreateSessionRequest};
 use crate::models::auth::GoogleAuthRequest;
 use crate::models::error::AppError;
@@ -76,3 +77,15 @@ pub fn require_route_sub(param: Option<&str>) -> Result<String, AppError> {
         _ => Err(AppError::bad_request("Missing user id.")),
     }
 }
+
+/// Distinguishes mobile self-disconnect from web-dashboard revocation.
+/// When the caller's auth token matches the token to revoke, the device
+/// is disconnecting itself.
+pub fn resolve_lifecycle_kind(auth_token: &str, token_to_revoke: &str) -> DeviceLifecycleKind {
+    if auth_token == token_to_revoke {
+        DeviceLifecycleKind::Disconnected
+    } else {
+        DeviceLifecycleKind::Revoked
+    }
+}
+

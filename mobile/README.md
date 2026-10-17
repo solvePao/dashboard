@@ -30,7 +30,7 @@ npm run typecheck  # vue-tsc only, no emit
 1. App starts, verifies any saved device token via `GET /api/auth/me`.
 2. A rejected token (401/403) is cleared; an unreachable backend keeps the
    saved token and the user can retry via **Check for Auth**.
-3. Otherwise a 128-hex session is created (`POST /api/auth/device/session`).
+3. Otherwise a 32-hex session is created (`POST /api/auth/device/session`).
 4. The backend's canonical `short_code` and `qr_svg` are displayed (QR via
    `<img>`, with a live expiry countdown from `expires_at`).
 5. After pairing on the web dashboard, **Check for Auth** exchanges the

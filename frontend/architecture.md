@@ -197,6 +197,11 @@ flowchart TD
 5. `sessionStorage.persistSession` persists the user and credential into `localStorage`.
 6. `useDevices.fetchDevices` is triggered immediately to populate connected devices.
 
+### Live Device List (Durable Object hub)
+1. Login also plants an `HttpOnly` session cookie (REST keeps the bearer header). `useDevices` opens one WebSocket to `GET /api/devices/live`, which the Worker authenticates from that cookie and proxies to the per-user `DevicesHubObject`.
+2. On `revoked`/`disconnected` events the named row is filtered out at once; on `authorized` the list re-fetches once for full row details.
+3. The hub stores a `revision` counter and `last_event`; after a reconnect the dashboard replays a single missed event or re-fetches when the revision gap is larger. Sign-out closes the socket and expires the cookie via `POST /api/auth/logout`.
+
 ### Device Pairing Flow
 1. User clicks **Add Device** in `TopNavbar` or `ConnectedDevicesList`.
 2. `AddDeviceModal` opens with two options:

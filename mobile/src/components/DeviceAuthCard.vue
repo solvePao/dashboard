@@ -11,7 +11,6 @@ const {
   authState,
   isAuthenticated,
   createSession,
-  disconnect,
 } = useDeviceAuth();
 </script>
 
@@ -20,7 +19,6 @@ const {
     <DeviceAuthorizedView
       v-if="isAuthenticated && user"
       :user="user"
-      @disconnect="disconnect"
     />
 
     <DevicePairingView

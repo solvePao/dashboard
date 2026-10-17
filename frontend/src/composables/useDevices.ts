@@ -1,16 +1,131 @@
 import { ref } from "vue";
 import { logger } from "../lib/logger";
 import { ApiError } from "../api/client";
-import { fetchDevicesApi, authorizeDeviceApi, revokeDeviceApi } from "../api/deviceApi";
+import {
+  fetchDevicesApi,
+  authorizeDeviceApi,
+  revokeDeviceApi,
+  devicesHubUrl,
+} from "../api/deviceApi";
+import { isStoredSessionExpired } from "../services/sessionStorage";
 import type { DeviceItem, AuthorizeDeviceResult } from "../types/device";
 
 const devices = ref<DeviceItem[]>([]);
 const devicesLoading = ref(false);
 const devicesError = ref<string | null>(null);
 
+interface HubEvent {
+  kind: string;
+  token?: string;
+  revision: number;
+}
+
+interface HubSnapshot {
+  kind: "snapshot";
+  revision: number;
+  last_event?: HubEvent | null;
+}
+
+let hubSocket: WebSocket | null = null;
+let hubReconnectTimer: ReturnType<typeof setTimeout> | undefined;
+let hubReconnectAttempts = 0;
+let hubWanted = false;
+let lastHubRevision = 0;
+let lastFetchToken: string | null = null;
+
 export function useDevices() {
+  function applyHubEvent(event: HubEvent): void {
+    if (event.revision <= lastHubRevision) return;
+    lastHubRevision = event.revision;
+    if (
+      (event.kind === "revoked" || event.kind === "disconnected") &&
+      event.token
+    ) {
+      devices.value = devices.value.filter((d) => d.token !== event.token);
+    } else if (event.kind === "authorized") {
+      // A new row needs its full details; re-fetch the list once.
+      void fetchDevices(lastFetchToken).catch(() => undefined);
+    }
+  }
+
+  function handleHubSnapshot(snapshot: HubSnapshot): void {
+    if (lastHubRevision === 0) {
+      // First connect: the in-flight list load is the baseline.
+      lastHubRevision = snapshot.revision;
+      return;
+    }
+    if (snapshot.revision === lastHubRevision) return;
+    const missed = snapshot.last_event;
+    if (
+      missed &&
+      missed.revision === snapshot.revision &&
+      missed.revision === lastHubRevision + 1
+    ) {
+      applyHubEvent(missed);
+    } else {
+      // More than one change was missed; one re-fetch resynchronizes.
+      lastHubRevision = snapshot.revision;
+      void fetchDevices(lastFetchToken).catch(() => undefined);
+    }
+  }
+
+  function connectHub(): void {
+    hubWanted = true;
+    if (hubSocket && hubSocket.readyState <= WebSocket.OPEN) return;
+    if (isStoredSessionExpired()) {
+      hubWanted = false;
+      return;
+    }
+
+    const ws = new WebSocket(devicesHubUrl());
+    hubSocket = ws;
+
+    ws.onopen = () => {
+      hubReconnectAttempts = 0;
+    };
+    ws.onmessage = (message) => {
+      try {
+        const body = JSON.parse(String(message.data)) as HubEvent | HubSnapshot;
+        if (body.kind === "snapshot") {
+          handleHubSnapshot(body as HubSnapshot);
+        } else {
+          applyHubEvent(body as HubEvent);
+        }
+      } catch {
+        logger.warn("devices", "Ignored malformed hub message");
+      }
+    };
+    ws.onclose = () => {
+      if (hubSocket === ws) hubSocket = null;
+      if (hubWanted && !isStoredSessionExpired()) {
+        const delay = Math.min(1000 * 2 ** hubReconnectAttempts, 5000);
+        hubReconnectAttempts += 1;
+        hubReconnectTimer = setTimeout(connectHub, delay);
+      }
+    };
+    ws.onerror = () => ws.close();
+  }
+
+  function closeHub(): void {
+    hubWanted = false;
+    if (hubReconnectTimer) {
+      clearTimeout(hubReconnectTimer);
+      hubReconnectTimer = undefined;
+    }
+    hubReconnectAttempts = 0;
+    lastHubRevision = 0;
+    lastFetchToken = null;
+    if (hubSocket) {
+      hubSocket.onclose = null;
+      hubSocket.close();
+      hubSocket = null;
+    }
+  }
+
   async function fetchDevices(token: string | null): Promise<void> {
     if (!token) return;
+    lastFetchToken = token;
+    connectHub();
     devicesLoading.value = true;
     devicesError.value = null;
     try {
@@ -72,6 +187,7 @@ export function useDevices() {
   }
 
   function clearDevices(): void {
+    closeHub();
     devices.value = [];
     devicesError.value = null;
   }
@@ -84,6 +200,7 @@ export function useDevices() {
     authorizeDevice,
     revokeDevice,
     clearDevices,
+    closeHub,
   };
 }
 

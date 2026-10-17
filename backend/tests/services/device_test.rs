@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use backend::common::DeviceLifecycleKind;
 use backend::models::auth::User;
 use backend::models::device::{CheckSessionResponse, DeviceToken, PairingCode, PairingState};
 use backend::models::error::{AppError, AppResult};
 use backend::services::device::DeviceService;
-use backend::services::store::{DeviceNotifier, NoNotify, PairingClient, PairingStore};
+use backend::services::store::{DeviceNotifier, HubNotifier, NoNotify, PairingClient, PairingStore};
 
 fn sample_user(id: i64) -> User {
     User {
@@ -258,8 +259,26 @@ impl DeviceNotifier for FakeNotifier {
     }
 }
 
+struct FakeHubNotifier {
+    calls: Mutex<Vec<(i64, DeviceLifecycleKind, Option<String>)>>,
+}
+
+impl FakeHubNotifier {
+    fn new() -> Self {
+        Self {
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl HubNotifier for FakeHubNotifier {
+    async fn notify_hub(&self, user_id: i64, kind: DeviceLifecycleKind, device_token: Option<&str>) {
+        self.calls.lock().unwrap().push((user_id, kind, device_token.map(str::to_string)));
+    }
+}
+
 fn valid_session_id() -> String {
-    "ab".repeat(64)
+    "ab".repeat(16)
 }
 
 fn harness() -> (FakePairingStore, FakePairingClient) {
@@ -368,7 +387,7 @@ async fn authorize_ok_with_defaults_and_custom_name() {
     assert_eq!(res.device_name, "Mobile Device");
 
     // Second session with custom name and short-code lookup.
-    let sid2 = "cd".repeat(64);
+    let sid2 = "cd".repeat(16);
     let created =
         DeviceService::create_session_with(&store, &client, &sid2, |_| Ok("<svg/>".to_string()))
             .await
@@ -723,3 +742,131 @@ async fn revoke_succeeds_when_push_fails() {
     });
     assert!(DeviceService::revoke_device_with(&store, &quiet, 1, "t8").await.unwrap());
 }
+
+#[tokio::test]
+async fn authorize_and_notify_hub() {
+    let (store, client) = harness();
+    let hub = FakeHubNotifier::new();
+    let sid = valid_session_id();
+    client.seed(&sid, pending_state("future"));
+
+    let res = DeviceService::authorize_device_and_notify_with(
+        &store,
+        &client,
+        &hub,
+        &sample_user(7),
+        &sid,
+        Some("My Phone"),
+        || Ok("tok-generated".to_string()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(res.status, "authorized");
+    // Verify Hub was notified of authorization
+    let calls = hub.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0], (7, DeviceLifecycleKind::Authorized, None));
+
+    // When authorization fails, Hub should NOT be notified
+    let hub2 = FakeHubNotifier::new();
+    let fail_res = DeviceService::authorize_device_and_notify_with(
+        &store,
+        &client,
+        &hub2,
+        &sample_user(7),
+        "nonexistent-session",
+        None,
+        || Ok("tok".to_string()),
+    )
+    .await;
+    assert!(fail_res.is_err());
+    assert_eq!(hub2.calls.lock().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn revoke_and_notify_hub() {
+    let (store, _client) = harness();
+    let dev_notifier = FakeNotifier::new();
+    let hub_notifier = FakeHubNotifier::new();
+
+    store.tokens.lock().unwrap().push(DeviceToken {
+        token: "live-token-1".to_string(),
+        user_id: 42,
+        device_name: "Phone".to_string(),
+        created_at: "c".to_string(),
+        expires_at: "e".to_string(),
+        last_used_at: None,
+    });
+
+    // 1. Web dashboard revocation
+    let revoked = DeviceService::revoke_device_and_notify_with(
+        &store,
+        &dev_notifier,
+        &hub_notifier,
+        42,
+        "live-token-1",
+        DeviceLifecycleKind::Revoked,
+    )
+    .await
+    .unwrap();
+
+    assert!(revoked);
+    assert_eq!(dev_notifier.calls.lock().unwrap().as_slice(), ["live-token-1"]);
+    let hub_calls = hub_notifier.calls.lock().unwrap().clone();
+    assert_eq!(hub_calls.len(), 1);
+    assert_eq!(
+        hub_calls[0],
+        (42, DeviceLifecycleKind::Revoked, Some("live-token-1".to_string()))
+    );
+
+    // 2. Mobile self-disconnect
+    store.tokens.lock().unwrap().push(DeviceToken {
+        token: "live-token-2".to_string(),
+        user_id: 42,
+        device_name: "Phone 2".to_string(),
+        created_at: "c".to_string(),
+        expires_at: "e".to_string(),
+        last_used_at: None,
+    });
+
+    let disconnected = DeviceService::revoke_device_and_notify_with(
+        &store,
+        &dev_notifier,
+        &hub_notifier,
+        42,
+        "live-token-2",
+        DeviceLifecycleKind::Disconnected,
+    )
+    .await
+    .unwrap();
+
+    assert!(disconnected);
+    assert_eq!(
+        dev_notifier.calls.lock().unwrap().as_slice(),
+        ["live-token-1", "live-token-2"]
+    );
+    let hub_calls = hub_notifier.calls.lock().unwrap().clone();
+    assert_eq!(hub_calls.len(), 2);
+    assert_eq!(
+        hub_calls[1],
+        (42, DeviceLifecycleKind::Disconnected, Some("live-token-2".to_string()))
+    );
+
+    // 3. Revoking nonexistent token does not notify
+    let gone = DeviceService::revoke_device_and_notify_with(
+        &store,
+        &dev_notifier,
+        &hub_notifier,
+        42,
+        "nonexistent",
+        DeviceLifecycleKind::Revoked,
+    )
+    .await
+    .unwrap();
+
+    assert!(!gone);
+    assert_eq!(dev_notifier.calls.lock().unwrap().len(), 2);
+    assert_eq!(hub_notifier.calls.lock().unwrap().len(), 2);
+}
+

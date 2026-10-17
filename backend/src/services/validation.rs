@@ -1,14 +1,14 @@
 use crate::common::{DEFAULT_DEVICE_NAME, SHORT_CODE_LEN};
 use crate::models::error::{AppError, AppResult};
-use crate::utils::is_valid_128_hex;
+use crate::utils::is_valid_session_id_hex;
 
-/// Validates a raw session id: trims and enforces 128-hex shape.
+/// Validates a raw session id: trims and enforces 32-hex shape.
 /// Mirrors `DeviceService::create_session` validation exactly.
 pub fn validate_session_id(raw: &str) -> AppResult<String> {
     let trimmed = raw.trim();
-    if !is_valid_128_hex(trimmed) {
+    if !is_valid_session_id_hex(trimmed) {
         return Err(AppError::bad_request(
-            "Invalid session_id. Must be a 128-character hex string.",
+            "Invalid session_id. Must be a 32-character hex string.",
         ));
     }
     Ok(trimmed.to_string())

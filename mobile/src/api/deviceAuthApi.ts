@@ -31,6 +31,20 @@ export async function checkDeviceAuthApi(
   });
 }
 
+/**
+ * Deletes this device on the backend via the shared revoke endpoint:
+ * the device token is both the bearer credential and the target, which
+ * the backend records as a self-disconnect.
+ */
+export async function disconnectDeviceApi(token: string): Promise<void> {
+  await apiClient(`/api/devices/${encodeURIComponent(token)}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+}
+
 export async function fetchMeApi(token: string): Promise<MeResponse> {
   return apiClient<MeResponse>("/api/auth/me", {
     headers: {

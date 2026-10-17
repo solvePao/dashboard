@@ -30,10 +30,7 @@ pub fn is_origin_allowed(origin: Option<&str>, allowed: &[String]) -> bool {
 /// Origins allowed to call the API. Configured with the comma-separated
 /// `FRONTEND_ORIGINS` var; falls back to the local Vite dev servers.
 pub fn allowed_origins(env: &Env) -> Vec<String> {
-    let configured = env
-        .var("FRONTEND_ORIGINS")
-        .map(|v| v.to_string())
-        .unwrap_or_default();
+    let configured = super::env::get_frontend_origins(env).unwrap_or_default();
     parse_allowed_origins(&configured)
 }
 
@@ -53,6 +50,9 @@ pub fn apply_cors(origin: Option<&str>, allowed: &[String], mut res: Response) -
         if let Some(origin) = origin {
             let headers = res.headers_mut();
             headers.set("Access-Control-Allow-Origin", origin)?;
+            // Credentialed requests (the login cookie) require the exact
+            // origin above plus this flag; a wildcard origin is never used.
+            headers.set("Access-Control-Allow-Credentials", "true")?;
             headers.set("Vary", "Origin")?;
         }
     }
@@ -65,6 +65,7 @@ pub fn cors_preflight(origin: Option<&str>, allowed: &[String]) -> Result<Respon
         if let Some(origin) = origin {
             let headers = res.headers_mut();
             headers.set("Access-Control-Allow-Origin", origin)?;
+            headers.set("Access-Control-Allow-Credentials", "true")?;
             headers.set("Vary", "Origin")?;
             headers.set("Access-Control-Allow-Methods", ALLOWED_METHODS)?;
             headers.set("Access-Control-Allow-Headers", ALLOWED_HEADERS)?;

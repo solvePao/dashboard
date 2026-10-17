@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use super::auth::User;
+use crate::common::DeviceLifecycleKind;
 
 /// D1 pairing-code index row: a pointer only. Pairing state lives in
 /// the `PairingObject` Durable Object, never in this table.
@@ -94,5 +95,44 @@ pub struct DevicesResponse {
 #[derive(Debug, Serialize)]
 pub struct RevokeResponse {
     pub revoked: bool,
+}
+
+/// Worker -> hub object: one lifecycle change (authorize/revoke/disconnect).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HubEventRequest {
+    pub kind: DeviceLifecycleKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+
+/// A lifecycle change as stored and broadcast by the hub object.
+/// `revision` is assigned by the hub and strictly increases per user.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HubEvent {
+    pub kind: DeviceLifecycleKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    pub revision: u64,
+    /// Unix millis when the hub recorded the event.
+    pub at: u64,
+}
+
+/// Hub storage record: one small value per user, written once per
+/// lifecycle event and read only when a dashboard socket connects.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct HubState {
+    pub revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_event: Option<HubEvent>,
+}
+
+/// Sent to a dashboard socket on connect so it can replay a missed
+/// `last_event` or detect a larger revision gap and re-fetch.
+#[derive(Debug, Clone, Serialize)]
+pub struct HubSnapshot {
+    pub kind: String,
+    pub revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_event: Option<HubEvent>,
 }
 

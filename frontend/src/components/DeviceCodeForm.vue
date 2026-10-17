@@ -46,7 +46,7 @@ defineExpose({
         id="pairing-code"
         v-model="codeInput"
         type="text"
-        maxlength="128"
+        maxlength="32"
         placeholder="e.g. A3F89C"
         autocomplete="off"
         spellcheck="false"
@@ -54,7 +54,7 @@ defineExpose({
         @keyup.enter="handleSubmit"
       />
       <p class="mt-1.5 text-[11px] text-muted-foreground">
-        Enter the 6-character code (or full 128-character session ID) displayed on your mobile screen.
+        Enter the 6-character code (or full 32-character session ID) displayed on your mobile screen.
       </p>
     </div>
 

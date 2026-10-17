@@ -1,4 +1,4 @@
-const CODE_PATTERN = /^[A-Za-z0-9]{6,128}$/;
+const CODE_PATTERN = /^[A-Za-z0-9]{6,32}$/;
 const MAX_QR_LEN = 2048;
 
 function sanitizeCandidate(raw: string | null): string {

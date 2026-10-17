@@ -1,5 +1,14 @@
-import { apiClient, authHeader, ApiError } from "./client";
+import { apiClient, authHeader, ApiError, API_BASE_URL } from "./client";
 import type { DeviceItem, DevicesResponse, AuthorizeDeviceResponse } from "../types/device";
+
+/**
+ * WebSocket URL for the per-user devices hub. Authenticates with the
+ * HttpOnly session cookie planted at login; no credential in the URL.
+ */
+export function devicesHubUrl(): string {
+  const base = API_BASE_URL.replace(/^http/, "ws");
+  return `${base}/api/devices/live`;
+}
 
 export async function fetchDevicesApi(token: string): Promise<DeviceItem[]> {
   const data = await apiClient<DevicesResponse>("/api/devices", {

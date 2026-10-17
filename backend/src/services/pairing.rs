@@ -1,17 +1,29 @@
 use wasm_bindgen::JsValue;
 use worker::*;
 
-use super::store::{DeviceNotifier, PairingClient};
-use crate::common::{DEVICE_BINDING_NAME, PAIRING_BINDING_NAME};
+use super::store::{DeviceNotifier, HubNotifier, PairingClient};
+use crate::common::{DeviceLifecycleKind, DEVICE_BINDING_NAME, HUB_BINDING_NAME, PAIRING_BINDING_NAME};
 use crate::models::auth::User;
 use crate::models::device::{
-    CheckSessionResponse, PairingCommitRequest, PairingInitRequest, PairingState,
+    CheckSessionResponse, HubEventRequest, PairingCommitRequest, PairingInitRequest, PairingState,
 };
 use crate::models::error::{AppError, AppResult};
 
 /// Production `PairingClient` over a Durable Object namespace.
 /// One stub per session, addressed by the full `session_id`.
 pub struct DoPairingClient {
+    namespace: ObjectNamespace,
+}
+
+/// Production `DeviceNotifier` over a Durable Object namespace.
+/// One stub per device token, addressed by the token itself.
+pub struct DoDeviceNotifier {
+    namespace: ObjectNamespace,
+}
+
+/// Production `HubNotifier` over a Durable Object namespace.
+/// One stub per user, addressed by the internal user id.
+pub struct DoHubNotifier {
     namespace: ObjectNamespace,
 }
 
@@ -141,12 +153,6 @@ pub fn map_commit_status(status: u16) -> AppResult<bool> {
     }
 }
 
-/// Production `DeviceNotifier` over a Durable Object namespace.
-/// One stub per device token, addressed by the token itself.
-pub struct DoDeviceNotifier {
-    namespace: ObjectNamespace,
-}
-
 impl DoDeviceNotifier {
     pub fn from_env(env: &Env) -> AppResult<Self> {
         let namespace = env.durable_object(DEVICE_BINDING_NAME).map_err(|_| {
@@ -165,6 +171,40 @@ impl DeviceNotifier for DoDeviceNotifier {
         let mut init = RequestInit::new();
         init.method = Method::Post;
         let Ok(req) = Request::new_with_init("https://device/revoke", &init) else { return };
+        let _ = stub.fetch_with_request(req).await;
+    }
+}
+
+impl DoHubNotifier {
+    pub fn from_env(env: &Env) -> AppResult<Self> {
+        let namespace = env.durable_object(HUB_BINDING_NAME).map_err(|_| {
+            AppError::service_unavailable(format!(
+                "Durable Object binding '{HUB_BINDING_NAME}' is not configured."
+            ))
+        })?;
+        Ok(Self { namespace })
+    }
+}
+
+impl HubNotifier for DoHubNotifier {
+    async fn notify_hub(&self, user_id: i64, kind: DeviceLifecycleKind, device_token: Option<&str>) {
+        // Best-effort push; errors are intentionally swallowed.
+        let Ok(stub) = self.namespace.get_by_name(&user_id.to_string()) else { return };
+        let Ok(json) = serde_json::to_string(&HubEventRequest {
+            kind,
+            token: device_token.map(str::to_string),
+        }) else {
+            return;
+        };
+        let headers = Headers::new();
+        if headers.set("content-type", "application/json").is_err() {
+            return;
+        }
+        let mut init = RequestInit::new();
+        init.method = Method::Post;
+        init.headers = headers;
+        init.body = Some(JsValue::from_str(&json));
+        let Ok(req) = Request::new_with_init("https://hub/event", &init) else { return };
         let _ = stub.fetch_with_request(req).await;
     }
 }

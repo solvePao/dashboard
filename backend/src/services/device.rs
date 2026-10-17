@@ -1,8 +1,9 @@
 use worker::*;
 
-use super::pairing::{DoDeviceNotifier, DoPairingClient};
-use super::store::{D1Stores, DeviceNotifier, NoNotify, PairingClient, PairingStore};
+use super::pairing::{DoDeviceNotifier, DoHubNotifier, DoPairingClient};
+use super::store::{D1Stores, DeviceNotifier, HubNotifier, NoNotify, PairingClient, PairingStore};
 use super::validation as v;
+use crate::common::DeviceLifecycleKind;
 use crate::models::auth::User;
 use crate::models::device::{
     AuthorizeDeviceResponse, CheckSessionResponse, CreateSessionResponse, DeviceToken,
@@ -79,15 +80,64 @@ impl DeviceService {
         device_name: Option<&str>,
     ) -> AppResult<AuthorizeDeviceResponse> {
         let client = DoPairingClient::from_env(env)?;
-        Self::authorize_device_with(
-            &D1Stores(db),
-            &client,
+        match DoHubNotifier::from_env(env) {
+            Ok(hub) => {
+                Self::authorize_device_and_notify_with(
+                    &D1Stores(db),
+                    &client,
+                    &hub,
+                    user,
+                    code_or_session,
+                    device_name,
+                    utils::generate_secure_token,
+                )
+                .await
+            }
+            Err(_) => {
+                Self::authorize_device_and_notify_with(
+                    &D1Stores(db),
+                    &client,
+                    &NoNotify,
+                    user,
+                    code_or_session,
+                    device_name,
+                    utils::generate_secure_token,
+                )
+                .await
+            }
+        }
+    }
+
+    pub async fn authorize_device_and_notify_with<S, C, H, F>(
+        store: &S,
+        client: &C,
+        hub_notifier: &H,
+        user: &User,
+        code_or_session: &str,
+        device_name: Option<&str>,
+        gen_token: F,
+    ) -> AppResult<AuthorizeDeviceResponse>
+    where
+        S: PairingStore + Sync,
+        C: PairingClient + Sync,
+        H: HubNotifier + Sync,
+        F: FnOnce() -> std::result::Result<String, String>,
+    {
+        let result = Self::authorize_device_with(
+            store,
+            client,
             user,
             code_or_session,
             device_name,
-            utils::generate_secure_token,
+            gen_token,
         )
-        .await
+        .await;
+        if result.is_ok() {
+            hub_notifier
+                .notify_hub(user.id, DeviceLifecycleKind::Authorized, None)
+                .await;
+        }
+        result
     }
 
     pub async fn authorize_device_with<S, C, F>(
@@ -105,7 +155,7 @@ impl DeviceService {
     {
         let trimmed_code = v::normalize_code_or_session(code_or_session)?;
 
-        let session_id = if utils::is_valid_128_hex(&trimmed_code) {
+        let session_id = if utils::is_valid_session_id_hex(&trimmed_code) {
             trimmed_code.clone()
         } else {
             match store.store_find_session_by_code(&trimmed_code).await? {
@@ -196,16 +246,52 @@ impl DeviceService {
     /// Revokes a device token for the user and pushes the revocation to
     /// any live device socket. The push is best-effort: a dead object
     /// never fails the revocation itself.
+    /// `kind` is `DeviceLifecycleKind::Revoked` for web-initiated revocation and
+    /// `DeviceLifecycleKind::Disconnected` when the device deletes itself; both share this
+    /// one delete-and-notify path (D1 first, then the object pokes).
     pub async fn revoke_device(
         db: &D1Database,
         env: &Env,
         user_id: i64,
         token: &str,
+        kind: DeviceLifecycleKind,
     ) -> AppResult<bool> {
-        match DoDeviceNotifier::from_env(env) {
-            Ok(notifier) => Self::revoke_device_with(&D1Stores(db), &notifier, user_id, token).await,
-            Err(_) => Self::revoke_device_with(&D1Stores(db), &NoNotify, user_id, token).await,
+        let dev = DoDeviceNotifier::from_env(env);
+        let hub = DoHubNotifier::from_env(env);
+        match (dev, hub) {
+            (Ok(d), Ok(h)) => {
+                Self::revoke_device_and_notify_with(&D1Stores(db), &d, &h, user_id, token, kind).await
+            }
+            (Ok(d), Err(_)) => {
+                Self::revoke_device_and_notify_with(&D1Stores(db), &d, &NoNotify, user_id, token, kind).await
+            }
+            (Err(_), Ok(h)) => {
+                Self::revoke_device_and_notify_with(&D1Stores(db), &NoNotify, &h, user_id, token, kind).await
+            }
+            (Err(_), Err(_)) => {
+                Self::revoke_device_and_notify_with(&D1Stores(db), &NoNotify, &NoNotify, user_id, token, kind).await
+            }
         }
+    }
+
+    pub async fn revoke_device_and_notify_with<S, N, H>(
+        store: &S,
+        device_notifier: &N,
+        hub_notifier: &H,
+        user_id: i64,
+        token: &str,
+        kind: DeviceLifecycleKind,
+    ) -> AppResult<bool>
+    where
+        S: PairingStore + Sync,
+        N: DeviceNotifier + Sync,
+        H: HubNotifier + Sync,
+    {
+        let revoked = Self::revoke_device_with(store, device_notifier, user_id, token).await?;
+        if revoked {
+            hub_notifier.notify_hub(user_id, kind, Some(token)).await;
+        }
+        Ok(revoked)
     }
 
     pub async fn revoke_device_with<S, N>(

@@ -15,8 +15,8 @@ fn qr_svg_differs_per_input() {
 }
 
 #[test]
-fn qr_svg_works_for_128_hex_session() {
-    let session = "c".repeat(128);
+fn qr_svg_works_for_32_hex_session() {
+    let session = "c".repeat(32);
     let svg = generate_qr_svg(&session).unwrap();
     assert!(svg.contains("<svg"));
 }

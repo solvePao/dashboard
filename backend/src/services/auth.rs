@@ -73,12 +73,7 @@ impl AuthService {
     /// Verifies a Google ID token with Google's tokeninfo endpoint.
     /// Only used by the sign-in route — no other route accepts Google tokens.
     pub async fn verify_google_id_token(env: &Env, id_token: &str) -> AppResult<GoogleProfile> {
-        let client_id = env
-            .secret("GOOGLE_CLIENT_ID")
-            .map(|secret| secret.to_string())
-            .map_err(|_| {
-                AppError::service_unavailable("Google login is not configured on the server.")
-            })?;
+        let client_id = crate::utils::env::get_google_client_id(env)?;
 
         if id_token.is_empty() {
             return Err(AppError::bad_request("Missing Google ID token."));

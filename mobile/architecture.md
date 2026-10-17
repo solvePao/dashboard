@@ -4,7 +4,7 @@
 
 The mobile dashboard is a dedicated, landscape-oriented Single-Page Application (SPA) built with **Vue 3** (Composition API, `<script setup>`), **TypeScript** (strict mode), **Tailwind CSS v4**, **Lucide Icons**, **Reka UI**, and **Vite**.
 
-Designed to run on mobile devices or dedicated companion displays, the application pairs with the web dashboard via 128-character hexadecimal cryptographic session tokens, backend-rendered SVG QR codes, and 6-character short pairing codes. Once authorized, it acquires a persistent 6-month access token for continuous API communication.
+Designed to run on mobile devices or dedicated companion displays, the application pairs with the web dashboard via 32-character hexadecimal cryptographic session tokens, backend-rendered SVG QR codes, and 6-character short pairing codes. Once authorized, it acquires a persistent 6-month access token for continuous API communication.
 
 The codebase enforces strict separation of concerns:
 - **Domain Types (`src/types/`)**: Contract definitions for device auth, session status, and layout.
@@ -40,7 +40,7 @@ mobile/
     │   └── deviceAuthApi.ts       # Session creation, auth checking, and /api/auth/me verification
     │
     ├── services/                  # Non-reactive business logic & utilities
-    │   ├── crypto.ts              # 128-hex secure random session ID generator (crypto.getRandomValues)
+    │   ├── crypto.ts              # 32-hex secure random session ID generator (crypto.getRandomValues)
     │   └── deviceStorage.ts       # LocalStorage driver for mobile device token persistence
     │
     ├── composables/               # Reactive state controllers
@@ -55,7 +55,7 @@ mobile/
     │   ├── DeviceLinkedSummary.vue# Active connection summary and 6-month validity badge
     │   ├── DeviceAuthCard.vue     # Right panel coordinating pairing view & authorized profile
     │   ├── DevicePairingView.vue  # SVG QR code display, 6-char code badge, and copy button
-    │   ├── DeviceAuthorizedView.vue# Authorized profile avatar, name, email, and disconnect button
+    │   ├── DeviceAuthorizedView.vue# Authorized profile avatar, name, email, and connection badges
     │   └── ThemeToggle.vue        # Dropdown / button toggling light, dark, or system mode
     │
     ├── styles/                    # Decoupled stylesheets
@@ -108,7 +108,7 @@ flowchart TD
     TToggle --> useTheme
 
     subgraph ServicesLayer["Services Layer (src/services/)"]
-        CryptoService["crypto.ts\n(generate128Hex)"]
+        CryptoService["crypto.ts\n(generateSessionIdHex)"]
         DeviceStorage["deviceStorage.ts\n(getStoredDeviceToken, setStoredDeviceToken, removeStoredDeviceToken)"]
     end
 
@@ -149,7 +149,7 @@ flowchart TD
      - `fetchMeApi(token)`: Calls `GET /api/auth/me` with `Authorization: Bearer <token>`.
 
 3. **`src/services/` (Business Logic & Driver Layer)**
-   - **`crypto.ts`**: Uses `crypto.getRandomValues(new Uint8Array(64))` to generate a 128-hex random string matching backend cryptographic requirements.
+   - **`crypto.ts`**: Uses `crypto.getRandomValues(new Uint8Array(16))` to generate a 32-hex random string matching backend cryptographic requirements.
    - **`deviceStorage.ts`**: Reads, writes, and removes `dashboard.mobile.device_token` in `localStorage` with fail-safe error handling.
 
 4. **`src/composables/` (Reactive Controllers)**
@@ -202,7 +202,7 @@ sequenceDiagram
 ```
 
 ### 2. Session Creation & Pairing Check
-1. `useDeviceAuth.createSession` generates a 128-hex session ID using `crypto.generate128Hex()`.
+1. `useDeviceAuth.createSession` generates a 32-hex session ID using `crypto.generateSessionIdHex()`.
 2. Calls `deviceAuthApi.createDeviceSessionApi(sessionId)`.
 3. Backend returns the SVG QR code, 6-character short code, and 15-minute expiration timestamp.
 4. `DevicePairingView` renders the SVG QR code and displays the 6-character short code.
@@ -213,7 +213,13 @@ sequenceDiagram
 9. View automatically transitions to `DeviceAuthorizedView` displaying the user profile.
 10. `useDeviceAuth` establishes a live WebSocket connection via `deviceSocketUrl(token)` to `/api/devices/ws/:token`.
 
-### 3. Real-Time Revocation Handling
+### 3. Self-Disconnect (backend-confirmed)
+1. Tapping **Disconnect Device** (in the left box) opens a two-step confirmation in the left box; no request runs yet.
+2. On confirm, `useDeviceAuth.disconnect()` calls `disconnectDeviceApi` — `DELETE /api/devices/:token` with the device token as bearer — and waits.
+3. Only after the backend confirms (already-gone 401/403/404 counts as confirmed) does it close the socket, wipe `dashboard.mobile.device_token`, and start a fresh pairing session. On network/5xx failure it stays authorized, keeps the token, and shows a retry error in the left box confirmation panel.
+4. The backend deletes the D1 row first, then pokes the device object and the user's live hub, so an open web dashboard removes the row immediately.
+
+### 4. Real-Time Revocation Handling
 1. When the user revokes the device on the web dashboard, the backend triggers `DeviceObject`'s `/revoke` endpoint.
 2. `DeviceObject` pushes `{"status": "revoked", "message": "Device access was revoked from the web dashboard."}` over the active WebSocket and closes the socket.
 3. Mobile's `deviceSocket.onmessage` receives the revocation payload.

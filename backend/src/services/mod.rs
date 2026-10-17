@@ -6,5 +6,5 @@ pub mod validation;
 
 pub use auth::AuthService;
 pub use device::DeviceService;
-pub use pairing::{DoDeviceNotifier, DoPairingClient};
+pub use pairing::{DoDeviceNotifier, DoHubNotifier, DoPairingClient};
 

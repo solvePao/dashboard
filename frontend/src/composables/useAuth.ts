@@ -1,7 +1,7 @@
 import { computed, ref } from "vue";
 import { logger } from "../lib/logger";
 import { ApiError } from "../api/client";
-import { exchangeGoogleCredential } from "../api/authApi";
+import { exchangeGoogleCredential, logoutApi } from "../api/authApi";
 import {
   persistSession,
   restoreSession,
@@ -39,6 +39,9 @@ const {
 } = useDevices();
 
 function signOut(): void {
+  // Expire the hub cookie server-side (best-effort); clearDevices
+  // below closes the hub socket itself.
+  void logoutApi().catch(() => undefined);
   disableGoogleAutoSelect();
   user.value = null;
   authToken.value = null;

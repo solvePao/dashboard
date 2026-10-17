@@ -4,25 +4,25 @@ use backend::services::validation::{
 };
 
 #[test]
-fn validate_session_id_accepts_128_hex_and_trims() {
-    let raw = format!("  {}  ", "d".repeat(128));
+fn validate_session_id_accepts_32_hex_and_trims() {
+    let raw = format!("  {}  ", "d".repeat(32));
     let got = validate_session_id(&raw).unwrap();
-    assert_eq!(got, "d".repeat(128));
+    assert_eq!(got, "d".repeat(32));
 }
 
 #[test]
 fn validate_session_id_rejects() {
     assert!(validate_session_id("").is_err());
     assert!(validate_session_id("   ").is_err());
-    assert!(validate_session_id(&"a".repeat(127)).is_err());
-    assert!(validate_session_id(&"z".repeat(128)).is_err());
+    assert!(validate_session_id(&"a".repeat(31)).is_err());
+    assert!(validate_session_id(&"z".repeat(32)).is_err());
     let err = validate_session_id("short").unwrap_err();
     assert_eq!(err.status, 400);
 }
 
 #[test]
 fn derive_and_present_short_code() {
-    let id = "AbC123".to_string() + &"d".repeat(122);
+    let id = "AbC123".to_string() + &"d".repeat(26);
     assert_eq!(derive_short_code(&id), "abc123");
     assert_eq!(present_short_code("abc123"), "ABC123");
 }

@@ -6,7 +6,7 @@ pub mod routes;
 pub mod services;
 pub mod utils;
 
-pub use objects::{DeviceObject, PairingObject};
+pub use objects::{DeviceObject, DevicesHubObject, PairingObject};
 
 use utils::{
     allowed_origins, apply_cors, cors_preflight, is_websocket_upgrade, request_origin,
@@ -33,6 +33,9 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/api/auth/me", |req, ctx| async move {
             routes::auth::get_me(req, ctx).await
         })
+        .post_async("/api/auth/logout", |req, ctx| async move {
+            routes::auth::logout(req, ctx).await
+        })
         // Device pairing & QR routes
         .post_async("/api/auth/device/session", |req, ctx| async move {
             routes::device::create_session(req, ctx).await
@@ -45,6 +48,9 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         })
         .get_async("/api/auth/device/ws/:session_id", |req, ctx| async move {
             routes::device::pairing_socket(req, ctx).await
+        })
+        .get_async("/api/devices/live", |req, ctx| async move {
+            routes::device::devices_live(req, ctx).await
         })
         .get_async("/api/devices", |req, ctx| async move {
             routes::device::get_devices(req, ctx).await

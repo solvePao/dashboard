@@ -5,10 +5,6 @@ import type { UserProfile } from "../types/auth";
 defineProps<{
   user: UserProfile;
 }>();
-
-const emit = defineEmits<{
-  (e: "disconnect"): void;
-}>();
 </script>
 
 <template>
@@ -65,14 +61,6 @@ const emit = defineEmits<{
     <p class="mt-4 max-w-xs text-xs text-muted-foreground/80">
       This mobile device is securely linked to your account. Future API requests will use your persistent 6-month token.
     </p>
-
-    <button
-      type="button"
-      class="mt-6 inline-flex items-center gap-2 rounded-lg border border-border px-3.5 py-1.5 text-xs font-medium text-muted-foreground transition hover:bg-accent hover:text-foreground"
-      @click="emit('disconnect')"
-    >
-      Disconnect Device
-    </button>
   </div>
 </template>
 

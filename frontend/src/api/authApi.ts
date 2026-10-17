@@ -14,6 +14,16 @@ export async function exchangeGoogleCredential(
 ): Promise<ExchangeGoogleAuthResponse> {
   return apiClient<ExchangeGoogleAuthResponse>("/api/auth/google", {
     method: "POST",
+    // Stores the HttpOnly hub cookie planted by the login response.
+    credentials: "include",
     body: JSON.stringify({ credential }),
+  });
+}
+
+/** Expires the hub session cookie. Best-effort on sign-out. */
+export async function logoutApi(): Promise<void> {
+  await apiClient("/api/auth/logout", {
+    method: "POST",
+    credentials: "include",
   });
 }

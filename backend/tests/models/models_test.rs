@@ -1,8 +1,10 @@
+use backend::common::DeviceLifecycleKind;
 use backend::models::auth::{GoogleAuthRequest, TokenInfo, User, UserResponse};
 use backend::models::device::{
     AuthorizeDeviceRequest, AuthorizeDeviceResponse, CheckSessionRequest, CheckSessionResponse,
-    CreateSessionRequest, CreateSessionResponse, DeviceToken, DevicesResponse, PairingCode,
-    PairingCommitRequest, PairingInitRequest, PairingState, RevokeResponse,
+    CreateSessionRequest, CreateSessionResponse, DeviceToken, DevicesResponse, HubEvent,
+    HubEventRequest, HubSnapshot, HubState, PairingCode, PairingCommitRequest, PairingInitRequest,
+    PairingState, RevokeResponse,
 };
 use backend::models::error::AppError;
 
@@ -159,3 +161,85 @@ fn check_session_response_roundtrips_from_object() {
     assert_eq!(r.status, "authorized");
     assert_eq!(r.token.as_deref(), Some("tok"));
 }
+
+#[test]
+fn hub_models_serde() {
+    // HubEventRequest with token: Some
+    let req = HubEventRequest {
+        kind: DeviceLifecycleKind::Authorized,
+        token: Some("tok-123".to_string()),
+    };
+    let s = serde_json::to_string(&req).unwrap();
+    let back: HubEventRequest = serde_json::from_str(&s).unwrap();
+    assert_eq!(back.kind, DeviceLifecycleKind::Authorized);
+    assert_eq!(back.token.as_deref(), Some("tok-123"));
+
+    // HubEventRequest with token: None
+    let req_none: HubEventRequest = serde_json::from_value(serde_json::json!({
+        "kind": "revoked"
+    }))
+    .unwrap();
+    assert_eq!(req_none.kind, DeviceLifecycleKind::Revoked);
+    assert_eq!(req_none.token, None);
+
+    // HubEvent with token: Some
+    let ev = HubEvent {
+        kind: DeviceLifecycleKind::Disconnected,
+        token: Some("tok-abc".to_string()),
+        revision: 42,
+        at: 1700000000000,
+    };
+    let ev_str = serde_json::to_string(&ev).unwrap();
+    assert!(ev_str.contains("\"kind\":\"disconnected\""));
+    assert!(ev_str.contains("\"revision\":42"));
+    assert!(ev_str.contains("\"token\":\"tok-abc\""));
+    let ev_back: HubEvent = serde_json::from_str(&ev_str).unwrap();
+    assert_eq!(ev_back.kind, DeviceLifecycleKind::Disconnected);
+    assert_eq!(ev_back.revision, 42);
+
+    // HubEvent with token: None omits token field in serialized JSON
+    let ev_no_token = HubEvent {
+        kind: DeviceLifecycleKind::Authorized,
+        token: None,
+        revision: 1,
+        at: 1000,
+    };
+    let ev_no_token_str = serde_json::to_string(&ev_no_token).unwrap();
+    assert!(!ev_no_token_str.contains("token"));
+
+    // HubState default
+    let default_state = HubState::default();
+    assert_eq!(default_state.revision, 0);
+    assert!(default_state.last_event.is_none());
+    let default_str = serde_json::to_string(&default_state).unwrap();
+    assert!(!default_str.contains("last_event"));
+
+    // HubState roundtrip with last_event
+    let state_with_event = HubState {
+        revision: 10,
+        last_event: Some(ev.clone()),
+    };
+    let s = serde_json::to_string(&state_with_event).unwrap();
+    let back_state: HubState = serde_json::from_str(&s).unwrap();
+    assert_eq!(back_state.revision, 10);
+    assert_eq!(back_state.last_event.unwrap().revision, 42);
+
+    // HubSnapshot
+    let snapshot = HubSnapshot {
+        kind: "snapshot".to_string(),
+        revision: 10,
+        last_event: Some(ev),
+    };
+    let snap_str = serde_json::to_string(&snapshot).unwrap();
+    assert!(snap_str.contains("\"kind\":\"snapshot\""));
+    assert!(snap_str.contains("\"revision\":10"));
+
+    let snap_empty = HubSnapshot {
+        kind: "snapshot".to_string(),
+        revision: 0,
+        last_event: None,
+    };
+    let snap_empty_str = serde_json::to_string(&snap_empty).unwrap();
+    assert!(!snap_empty_str.contains("last_event"));
+}
+

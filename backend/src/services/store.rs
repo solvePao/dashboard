@@ -1,5 +1,6 @@
 use worker::D1Database;
 
+use crate::common::DeviceLifecycleKind;
 use crate::db;
 use crate::models::auth::User;
 use crate::models::device::{CheckSessionResponse, DeviceToken, PairingCode, PairingState};
@@ -56,6 +57,18 @@ pub struct NoNotify;
 
 impl DeviceNotifier for NoNotify {
     async fn notify_revoked(&self, _device_token: &str) {}
+}
+
+/// Live-dashboard side of the lifecycle: tells the user's hub object
+/// that a device was authorized, revoked, or disconnected. Like
+/// `DeviceNotifier`, this is fire-and-forget at every call site.
+#[allow(async_fn_in_trait)]
+pub trait HubNotifier {
+    async fn notify_hub(&self, user_id: i64, kind: DeviceLifecycleKind, device_token: Option<&str>);
+}
+
+impl HubNotifier for NoNotify {
+    async fn notify_hub(&self, _user_id: i64, _kind: DeviceLifecycleKind, _device_token: Option<&str>) {}
 }
 
 /// Durable Object side of pairing: the state referee.

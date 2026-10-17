@@ -40,7 +40,7 @@ async function submitAuthorization(code: string, deviceName: string = "Mobile De
   }
   // extractSessionOrCode returns "" for non-conforming QR payloads
   // (foreign URLs, wrong schemes, bad shapes): never send those.
-  if (!/^[A-Za-z0-9]{6,128}$/.test(trimmed)) {
+  if (!/^[A-Za-z0-9]{6,32}$/.test(trimmed)) {
     resultMessage.value = { type: "error", text: "That QR code is not a valid pairing code. Please scan the code on your mobile device." };
     return;
   }

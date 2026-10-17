@@ -1,9 +1,16 @@
 use worker::*;
 
+use crate::common::{JWT_EXPIRY_SECS, SESSION_COOKIE_NAME};
 use crate::models::auth::GoogleAuthRequest;
 use crate::services::AuthService;
-use crate::utils::{json_error, json_ok};
+use crate::utils::{build_expired_session_cookie, build_session_cookie, json_error, json_ok};
 use super::{get_db, validation};
+
+/// Secure cookie attributes only in production, where the dashboard and
+/// API may be on different sites; local dev stays `SameSite=Lax`.
+fn cookie_secure(ctx: &RouteContext<()>) -> bool {
+    crate::utils::env::is_production(&ctx.env)
+}
 
 /// Sign-in route (public): the ONLY route that accepts a Google ID token.
 /// Returns the user plus the server-minted JWT the frontend must use
@@ -25,9 +32,32 @@ pub async fn google_auth(mut req: Request, ctx: RouteContext<()>) -> Result<Resp
     };
 
     match AuthService::login_with_google(&ctx.env, &db, &credential).await {
-        Ok(login) => json_ok(&login),
+        Ok(login) => {
+            // Also plant the session as an HttpOnly cookie: browsers
+            // cannot send `Authorization` on a WebSocket handshake, so
+            // the live devices hub authenticates from this cookie.
+            // REST routes keep using the bearer token unchanged.
+            let mut res = json_ok(&login)?;
+            let cookie = build_session_cookie(
+                SESSION_COOKIE_NAME,
+                &login.token,
+                JWT_EXPIRY_SECS,
+                cookie_secure(&ctx),
+            );
+            let _ = res.headers_mut().set("Set-Cookie", &cookie);
+            Ok(res)
+        }
         Err(err) => err.to_response(),
     }
+}
+
+/// Expires the hub session cookie. Called best-effort on sign-out;
+/// the bearer-token session itself is stateless and simply lapses.
+pub async fn logout(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let mut res = json_ok(&serde_json::json!({ "ok": true }))?;
+    let cookie = build_expired_session_cookie(SESSION_COOKIE_NAME, cookie_secure(&ctx));
+    let _ = res.headers_mut().set("Set-Cookie", &cookie);
+    Ok(res)
 }
 
 pub async fn get_user(req: Request, ctx: RouteContext<()>) -> Result<Response> {

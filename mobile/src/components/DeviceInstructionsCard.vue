@@ -8,8 +8,13 @@ import { useDeviceAuth } from "../composables/useDeviceAuth";
 const {
   authState,
   statusMessage,
+  isDisconnecting,
+  isConfirmingDisconnect,
+  disconnectError,
   isAuthenticated,
   checkAuth,
+  requestDisconnect,
+  cancelDisconnect,
   disconnect,
 } = useDeviceAuth();
 </script>
@@ -43,12 +48,36 @@ const {
     <div class="border-t border-border/60 pt-3">
       <div v-if="isAuthenticated">
         <button
+          v-if="!isConfirmingDisconnect"
           type="button"
           class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-xs font-medium text-foreground shadow-sm transition hover:bg-accent"
-          @click="disconnect"
+          @click="requestDisconnect"
         >
           Disconnect Device
         </button>
+        <div v-else class="flex flex-col gap-2">
+          <p v-if="disconnectError" class="text-xs font-medium text-destructive">
+            {{ disconnectError }}
+          </p>
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              :disabled="isDisconnecting"
+              class="flex-1 inline-flex items-center justify-center gap-2 rounded-lg bg-destructive px-4 py-2.5 text-xs font-medium text-white shadow-sm transition hover:bg-destructive/90 disabled:opacity-50"
+              @click="disconnect"
+            >
+              {{ isDisconnecting ? "Disconnecting..." : "Confirm Disconnect" }}
+            </button>
+            <button
+              type="button"
+              :disabled="isDisconnecting"
+              class="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-xs font-medium text-foreground shadow-sm transition hover:bg-accent disabled:opacity-50"
+              @click="cancelDisconnect"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
       </div>
 
       <div v-else class="flex items-center justify-between">
