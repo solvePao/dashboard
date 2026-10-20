@@ -3,6 +3,15 @@ import type { WalkieDeviceCodeResponse, WalkieGroupSummary } from "../types/walk
 import { getStoredDeviceToken } from "../services/deviceStorage";
 
 export class WalkieTalkieApi {
+  diagnostic(event: string, status: string): void {
+    const token = getStoredDeviceToken();
+    if (!token) return;
+    void apiClient("/api/walkie-talkie/diagnostics", {
+      method: "POST", headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ event, status }), keepalive: true,
+    }).catch(() => undefined);
+  }
+
   private request<T>(path: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
     const token = getStoredDeviceToken();
     if (!token) return Promise.reject(new Error("This phone must be authorized first."));

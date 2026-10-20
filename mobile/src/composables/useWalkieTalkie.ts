@@ -19,6 +19,7 @@ export function useWalkieTalkie(groupId: Ref<string | null>) {
   let lifecycle = 0;
   let disposed = false;
   let refreshingSelection = false;
+  const diagnostic = (event: string) => new WalkieTalkieApi().diagnostic(event, state.value.status);
   const observer = new WalkieTalkieActivity((nextGroups, nextActivity) => {
     groups.value = nextGroups; activity.value = nextActivity;
     if (nextGroups.length) activityError.value = "";
@@ -29,11 +30,12 @@ export function useWalkieTalkie(groupId: Ref<string | null>) {
     state.value = { ...state.value, groupName: snapshot.group_name || state.value.groupName, members: snapshot.members };
   }, message => { activityError.value = message; }, joined => {
     if (!groupId.value || joined.some(group => group.id === groupId.value) || refreshingSelection) return;
-    pause();
+    diagnostic("selection_lost"); pause();
     refreshingSelection = true;
     void refreshWidgets().finally(() => { refreshingSelection = false; });
   });
   watch(groupId, id => {
+    if (session) diagnostic("group_changed");
     session?.pause();
     const summary = groups.value.find(group => group.id === id);
     state.value = { ...initial(), groupName: summary?.name || "Walkie-talkie", members: summary?.members || [] };
@@ -51,10 +53,10 @@ export function useWalkieTalkie(groupId: Ref<string | null>) {
   const release = () => session?.release();
   const pause = () => { lifecycle++; resumeTarget = null; session?.pause(); };
   const visibility = () => {
-    if (document.visibilityState === "hidden") { pause(); observer.stop(); }
+    if (document.visibilityState === "hidden") { diagnostic("hidden"); pause(); observer.stop(); }
     else observer.start();
   };
-  const pagehide = () => { pause(); observer.stop(); };
+  const pagehide = () => { diagnostic("pagehide"); pause(); observer.stop(); };
   async function switchGroup(id: string): Promise<void> {
     if (switching.value || id === groupId.value) return;
     switching.value = true; activityError.value = "";
@@ -89,10 +91,10 @@ export function useWalkieTalkie(groupId: Ref<string | null>) {
   document.addEventListener("visibilitychange", visibility);
   if (document.visibilityState === "visible") observer.start();
   onBeforeUnmount(() => {
-    disposed = true; pause(); observer.stop();
+    diagnostic("unmount"); disposed = true; pause(); observer.stop();
     unsubscribeDeviceSocket();
     window.removeEventListener("blur", release); window.removeEventListener("pagehide", pagehide); document.removeEventListener("visibilitychange", visibility);
   });
   return { state, groups, activityError, switching, otherActivity: computed(() => activity.value.filter(item => item.groupId !== groupId.value)), switchGroup,
-    enable: () => session?.enable(), pause, press: () => session?.press(), release, resumePlayback: () => session?.resumePlayback() };
+    enable: () => { diagnostic("enable"); return session?.enable(); }, pause: () => { diagnostic("pause"); pause(); }, press: () => session?.press(), release, resumePlayback: () => session?.resumePlayback() };
 }

@@ -75,6 +75,22 @@ async fn dispatch(mut req: Request, ctx: RouteContext<()>) -> AppResult<Response
             .as_deref(),
     )
     .ok_or_else(|| AppError::unauthorized("Authorization required."))?;
+    if path.ends_with("/diagnostics") {
+        let uid = crate::db::get_device_token_owner(&db, &token)
+            .await.map_err(db_error)?
+            .ok_or_else(|| AppError::unauthorized("Device authorization expired."))?;
+        repo.rate_limit(&format!("diagnostics:{uid}"), 60).await?;
+        let body: Value = req.json().await
+            .map_err(|_| AppError::bad_request("Invalid JSON body."))?;
+        let event = body.get("event").and_then(Value::as_str).unwrap_or("");
+        let status = body.get("status").and_then(Value::as_str).unwrap_or("");
+        if !["enable", "pause", "hidden", "pagehide", "unmount", "group_changed", "selection_lost"].contains(&event)
+            || !["activation", "connecting", "reconnecting", "ready", "calling", "talking", "listening", "busy", "error"].contains(&status) {
+            return Err(AppError::bad_request("Invalid diagnostic event."));
+        }
+        console_log!("walkie client lifecycle event={} status={}", event, status);
+        return Response::from_json(&json!({"ok":true})).map_err(db_error);
+    }
     if path.ends_with("/device-code") {
         let uid = crate::db::get_device_token_owner(&db, &token)
             .await

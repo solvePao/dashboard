@@ -99,6 +99,7 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/api/walkie-talkie/activity", |req, ctx| async move { walkie::api::handle(req, ctx).await })
         .post_async("/api/walkie-talkie/memberships", |req, ctx| async move { walkie::api::handle(req, ctx).await })
         .post_async("/api/walkie-talkie/availability", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .post_async("/api/walkie-talkie/diagnostics", |req, ctx| async move { walkie::api::handle(req, ctx).await })
         .post_async("/api/walkie-talkie/connect", |req, ctx| async move { walkie::api::handle(req, ctx).await })
         .post_async("/api/walkie-talkie/media", |req, ctx| async move { walkie::api::handle(req, ctx).await })
         .post_async("/api/walkie-talkie/wake", |req, ctx| async move { walkie::api::handle(req, ctx).await })
