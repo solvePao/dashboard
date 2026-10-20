@@ -120,7 +120,7 @@ function applyQuotesWithFlash(newQuotes: Record<string, StockQuoteData>, isIniti
 
 const symbolsList = computed<StockSymbolItem[]>(() => {
   if (props.config.symbols && props.config.symbols.length > 0) {
-    return props.config.symbols.slice(0, 16);
+    return props.config.symbols.slice(0, 4);
   }
   return [
     {
@@ -171,25 +171,10 @@ const daySpread = computed(() => {
   return Math.max(0, currentQuote.value.dayHigh - currentQuote.value.dayLow);
 });
 
-// Adaptive Grid Layout Classes based on N symbols
-const gridClass = computed(() => {
-  const count = symbolsList.value.length;
-  if (count <= 2) return "grid-cols-2 grid-rows-1";
-  if (count <= 4) return "grid-cols-2 grid-rows-2";
-  if (count <= 6) return "grid-cols-3 grid-rows-2";
-  if (count <= 8) return "grid-cols-4 grid-rows-2";
-  if (count <= 12) return "grid-cols-4 grid-rows-3";
-  return "grid-cols-4 grid-rows-4";
-});
-
-// Content density tier for grid tiles
-const densityTier = computed<"split2" | "quad4" | "matrix8" | "dense16">(() => {
-  const count = symbolsList.value.length;
-  if (count <= 2) return "split2";
-  if (count <= 4) return "quad4";
-  if (count <= 8) return "matrix8";
-  return "dense16";
-});
+// At most four symbols are displayed; saved legacy watchlists remain intact.
+const gridClass = computed(() =>
+  symbolsList.value.length <= 2 ? "grid-cols-2 grid-rows-1" : "grid-cols-2 grid-rows-2"
+);
 
 function getQuoteFor(sym: string): StockQuoteData | null {
   return quotes.value[sym.toUpperCase()] || null;
@@ -272,6 +257,9 @@ async function load(force = false): Promise<void> {
 
   try {
     const fresh = await fetchMultipleStockQuotes(symbols, aborter.signal, force);
+    if (Object.keys(fresh).length === 0 && Object.keys(quotes.value).length === 0) {
+      throw new Error("Quotes unavailable. Please try refreshing.");
+    }
     applyQuotesWithFlash(fresh, false);
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") return;
@@ -322,7 +310,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div
-    class="mo-stock-root relative flex h-full w-full flex-col justify-between overflow-hidden p-2.5 sm:p-3 text-zinc-100 font-mono select-none bg-[#090a0f] border border-amber-500/20 shadow-[inset_0_0_24px_rgba(245,158,11,0.02)]"
+    class="mo-stock-root min-h-0 min-w-0 relative flex h-full w-full flex-col justify-between overflow-hidden p-2.5 text-zinc-100 font-mono select-none bg-[#090a0f] border border-amber-500/20 shadow-[inset_0_0_24px_rgba(245,158,11,0.02)]"
   >
     <!-- Terminal Scanline Background Texture -->
     <div
@@ -370,7 +358,7 @@ onBeforeUnmount(() => {
       <div
         v-if="inspectedSymbol !== null || symbolsList.length === 1"
         key="detail-view"
-        class="flex h-full w-full flex-col justify-between overflow-hidden"
+        class="mo-stock-view flex min-h-0 min-w-0 h-full w-full flex-col gap-2 overflow-hidden"
       >
         <!-- 1. Top Terminal Bar -->
         <div class="mo-stock-header flex items-center justify-between gap-2 border-b border-zinc-800/80 pb-2 shrink-0">
@@ -394,10 +382,11 @@ onBeforeUnmount(() => {
               BBG
             </span>
 
-            <span class="font-bold text-xs tracking-wider text-amber-400 shrink-0">
+            <span class="min-w-0 truncate font-bold text-xs tracking-wider text-amber-400"
+              :title="currentSymbol.symbol">
               {{ currentSymbol.symbol }}
             </span>
-            <span class="truncate text-[11px] text-zinc-400 max-w-[90px] sm:max-w-[130px] uppercase">
+            <span class="truncate text-[11px] text-zinc-400 max-w-[90px] uppercase">
               {{ currentQuote?.name || currentSymbol.name }}
             </span>
 
@@ -414,7 +403,7 @@ onBeforeUnmount(() => {
           </div>
 
           <!-- Right: Status & Actions -->
-          <div class="flex items-center gap-2 text-[10px]">
+          <div class="mo-stock-actions flex flex-wrap items-center gap-2 text-[10px]">
             <div class="flex items-center gap-1.5 font-semibold">
               <span class="relative flex h-2 w-2">
                 <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 duration-1000" />
@@ -456,7 +445,10 @@ onBeforeUnmount(() => {
 
         <!-- Inspected Symbol Content with Flip Transition -->
         <Transition name="stock-symbol-flip" mode="out-in">
-          <div :key="currentSymbol.symbol" class="flex flex-1 flex-col justify-between min-h-0">
+          <div :key="currentSymbol.symbol" class="mo-stock-detail flex flex-1 flex-col gap-2 min-h-0 overflow-y-auto overscroll-contain">
+            <p v-if="!currentQuote" class="py-4 text-xs text-zinc-400" role="status">
+              Quote unavailable for {{ currentSymbol.symbol }}. Use refresh to try again.
+            </p>
             <!-- 2. Hero: Monospace Price & Bloomberg Block Change -->
             <div
               v-if="currentQuote"
@@ -466,7 +458,7 @@ onBeforeUnmount(() => {
               <div>
                 <div class="flex items-baseline gap-1.5">
                   <span
-                    class="text-4xl sm:text-5xl font-black font-mono tracking-tight leading-none text-white drop-shadow-[0_2px_10px_rgba(255,255,255,0.1)]"
+                    class="mo-detail-price text-4xl font-black font-mono tracking-tight leading-none text-white drop-shadow-[0_2px_10px_rgba(255,255,255,0.1)]"
                   >
                     {{ formatQuotePrice(currentQuote.price) }}
                   </span>
@@ -481,7 +473,7 @@ onBeforeUnmount(() => {
 
               <div class="text-right flex flex-col items-end">
                 <div
-                  class="inline-flex items-center gap-1 rounded-xs px-2.5 py-1 text-sm sm:text-base font-black font-mono tracking-tight shadow-md"
+                  class="inline-flex items-center gap-1 rounded-xs px-2.5 py-1 text-sm font-black font-mono tracking-tight shadow-md"
                   :class="
                     currentChangePercent === null
                       ? 'bg-zinc-800 text-zinc-400'
@@ -504,7 +496,7 @@ onBeforeUnmount(() => {
                   </span>
                 </div>
                 <p
-                  class="mt-1 text-xs sm:text-sm font-mono font-bold tracking-tight"
+                  class="mt-1 text-xs font-mono font-bold tracking-tight"
                   :class="
                     currentChangePercent === null
                       ? 'text-zinc-500'
@@ -523,7 +515,7 @@ onBeforeUnmount(() => {
             </div>
 
             <!-- 3. Day Range Bar -->
-            <div v-if="currentQuote" class="mo-stock-range border border-zinc-800/80 bg-zinc-950/60 rounded-xs p-1.5 sm:p-2 mb-1">
+            <div v-if="currentQuote" class="mo-stock-range border border-zinc-800/80 bg-zinc-950/60 rounded-xs p-1.5 mb-1">
               <div class="flex items-center justify-between text-[10px] text-zinc-400 font-mono mb-1">
                 <span><span class="text-zinc-400 font-bold">1D LO:</span> {{ formatQuotePrice(currentQuote.dayLow) }}</span>
                 <span class="text-[9px] uppercase tracking-widest text-amber-400/90 font-bold">
@@ -546,39 +538,39 @@ onBeforeUnmount(() => {
 
             <!-- 4. Dense Bloomberg Matrix Grid -->
             <div v-if="currentQuote" class="mo-stock-grid grid grid-cols-3 gap-1.5 pb-2">
-              <div class="mo-matrix-card border border-zinc-800/90 bg-zinc-950/70 p-1.5 sm:p-2 rounded-xs flex flex-col justify-between" style="--i: 0">
+              <div class="mo-matrix-card border border-zinc-800/90 bg-zinc-950/70 p-1.5 rounded-xs flex flex-col justify-between" style="--i: 0">
                 <span class="text-[9px] uppercase tracking-wider text-zinc-400 font-bold">OPEN</span>
-                <p class="mt-0.5 text-xs sm:text-sm font-bold font-mono tracking-tight text-zinc-100">
+                <p class="mt-0.5 text-xs font-bold font-mono tracking-tight text-zinc-100">
                   {{ formatQuotePrice(currentQuote.open) }}
                 </p>
               </div>
-              <div class="mo-matrix-card border border-zinc-800/90 bg-zinc-950/70 p-1.5 sm:p-2 rounded-xs flex flex-col justify-between" style="--i: 1">
+              <div class="mo-matrix-card border border-zinc-800/90 bg-zinc-950/70 p-1.5 rounded-xs flex flex-col justify-between" style="--i: 1">
                 <span class="text-[9px] uppercase tracking-wider text-zinc-400 font-bold">PREV CLS</span>
-                <p class="mt-0.5 text-xs sm:text-sm font-bold font-mono tracking-tight text-zinc-100">
+                <p class="mt-0.5 text-xs font-bold font-mono tracking-tight text-zinc-100">
                   {{ formatQuotePrice(currentQuote.prevClose) }}
                 </p>
               </div>
-              <div class="mo-matrix-card border border-zinc-800/90 bg-zinc-950/70 p-1.5 sm:p-2 rounded-xs flex flex-col justify-between" style="--i: 2">
+              <div class="mo-matrix-card border border-zinc-800/90 bg-zinc-950/70 p-1.5 rounded-xs flex flex-col justify-between" style="--i: 2">
                 <span class="text-[9px] uppercase tracking-wider text-zinc-400 font-bold">DAY HI</span>
-                <p class="mt-0.5 text-xs sm:text-sm font-bold font-mono tracking-tight text-emerald-400">
+                <p class="mt-0.5 text-xs font-bold font-mono tracking-tight text-emerald-400">
                   {{ formatQuotePrice(currentQuote.dayHigh) }}
                 </p>
               </div>
-              <div class="mo-matrix-card border border-zinc-800/90 bg-zinc-950/70 p-1.5 sm:p-2 rounded-xs flex flex-col justify-between" style="--i: 3">
+              <div class="mo-matrix-card border border-zinc-800/90 bg-zinc-950/70 p-1.5 rounded-xs flex flex-col justify-between" style="--i: 3">
                 <span class="text-[9px] uppercase tracking-wider text-zinc-400 font-bold">DAY LO</span>
-                <p class="mt-0.5 text-xs sm:text-sm font-bold font-mono tracking-tight text-rose-400">
+                <p class="mt-0.5 text-xs font-bold font-mono tracking-tight text-rose-400">
                   {{ formatQuotePrice(currentQuote.dayLow) }}
                 </p>
               </div>
-              <div class="mo-matrix-card border border-zinc-800/90 bg-zinc-950/70 p-1.5 sm:p-2 rounded-xs flex flex-col justify-between" style="--i: 4">
+              <div class="mo-matrix-card border border-zinc-800/90 bg-zinc-950/70 p-1.5 rounded-xs flex flex-col justify-between" style="--i: 4">
                 <span class="text-[9px] uppercase tracking-wider text-zinc-400 font-bold">VOLUME</span>
-                <p class="mt-0.5 text-xs sm:text-sm font-bold font-mono tracking-tight text-zinc-100">
+                <p class="mt-0.5 text-xs font-bold font-mono tracking-tight text-zinc-100">
                   {{ formatCompactNumber(currentQuote.volume) }}
                 </p>
               </div>
-              <div class="mo-matrix-card border border-zinc-800/90 bg-zinc-950/70 p-1.5 sm:p-2 rounded-xs flex flex-col justify-between" style="--i: 5">
+              <div class="mo-matrix-card border border-zinc-800/90 bg-zinc-950/70 p-1.5 rounded-xs flex flex-col justify-between" style="--i: 5">
                 <span class="text-[9px] uppercase tracking-wider text-zinc-400 font-bold">MKT CAP</span>
-                <p class="mt-0.5 text-xs sm:text-sm font-bold font-mono tracking-tight text-amber-400">
+                <p class="mt-0.5 text-xs font-bold font-mono tracking-tight text-amber-400">
                   {{ formatCompactNumber(currentQuote.marketCap) }}
                 </p>
               </div>
@@ -598,14 +590,14 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <!-- MODE B: ADAPTIVE MULTI-SYMBOL TERMINAL GRID (2 to 16 Tickers) -->
+      <!-- MODE B: MULTI-SYMBOL GRID (2 to 4 Tickers) -->
       <div
         v-else
         key="grid-view"
-        class="flex h-full w-full flex-col justify-between overflow-hidden"
+        class="mo-stock-view flex min-h-0 min-w-0 h-full w-full flex-col gap-2 overflow-hidden"
       >
         <!-- Grid Header Strip -->
-        <div class="flex items-center justify-between border-b border-zinc-800/80 pb-1.5 mb-1.5 shrink-0">
+        <div class="mo-stock-header flex items-center justify-between border-b border-zinc-800/80 pb-1.5 mb-1.5 shrink-0">
           <div class="flex items-center gap-1.5">
             <span class="inline-flex items-center gap-0.5 bg-amber-500 text-black px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider rounded-xs leading-none shadow-xs">
               BBG
@@ -615,7 +607,7 @@ onBeforeUnmount(() => {
             </span>
           </div>
 
-          <div class="flex items-center gap-2 text-[10px]">
+          <div class="mo-stock-actions flex flex-wrap items-center gap-2 text-[10px]">
             <div class="flex items-center gap-1.5 font-semibold">
               <span class="relative flex h-2 w-2">
                 <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 duration-1000" />
@@ -644,6 +636,7 @@ onBeforeUnmount(() => {
             <button
               type="button"
               class="rounded-xs border border-zinc-800 bg-zinc-900/80 p-1 text-zinc-400 hover:text-amber-400 cursor-pointer"
+              aria-label="Refresh all quotes"
               title="Refresh all (F9)"
               :disabled="loading"
               @click="load(true)"
@@ -657,203 +650,39 @@ onBeforeUnmount(() => {
         <TransitionGroup
           name="stock-grid-tile"
           tag="div"
-          :class="['grid flex-1 min-h-0 w-full gap-1 sm:gap-1.5', gridClass]"
+          :class="['mo-stock-tiles grid flex-1 min-h-0 min-w-0 w-full gap-1', gridClass]"
         >
           <div
             v-for="item in symbolsList"
             :key="item.symbol"
-            class="group relative flex flex-col justify-between overflow-hidden rounded-xs border border-zinc-800/90 bg-zinc-950/70 p-1.5 transition-all duration-200 hover:border-amber-500/60 hover:bg-zinc-900/90 hover:shadow-[0_0_12px_rgba(245,158,11,0.12)] cursor-pointer active:scale-[0.98]"
+            class="mo-stock-tile group relative flex min-h-0 min-w-0 flex-col justify-between overflow-hidden rounded-xs border border-zinc-800/90 bg-zinc-950/70 p-1.5 transition-all duration-200 hover:border-amber-500/60 hover:bg-zinc-900/90 hover:shadow-[0_0_12px_rgba(245,158,11,0.12)] cursor-pointer active:scale-[0.98]"
             :class="[
               getTileBorderClass(item.symbol),
               getFlashClass(item.symbol)
             ]"
+            role="button"
+            tabindex="0"
+            :aria-label="`View ${item.symbol} details`"
+            @keydown.enter="selectSymbol(item.symbol)"
+            @keydown.space.prevent="selectSymbol(item.symbol)"
             @click="selectSymbol(item.symbol)"
           >
-            <!-- TIER 1: SPLIT 2 (2 Symbols - Max Area) -->
-            <template v-if="densityTier === 'split2'">
-              <div class="flex items-center justify-between border-b border-zinc-800/60 pb-1">
-                <span class="font-bold text-xs sm:text-sm text-amber-400 tracking-wider">{{ item.symbol }}</span>
-                <span class="text-[10px] text-zinc-400 truncate max-w-[100px] uppercase">
-                  {{ getQuoteFor(item.symbol)?.name || item.name }}
-                </span>
-              </div>
-
-              <div class="my-auto py-1 flex items-baseline justify-between">
-                <div>
-                  <span class="text-2xl sm:text-3xl font-black font-mono text-white">
-                    {{ formatQuotePrice(getQuoteFor(item.symbol)?.price) }}
-                  </span>
-                  <span class="text-[10px] text-amber-400/80 ml-1 font-mono uppercase font-bold">
-                    {{ getQuoteFor(item.symbol)?.currency || "USD" }}
-                  </span>
-                </div>
-                <div
-                  v-if="getQuoteFor(item.symbol)"
-                  class="inline-flex items-center gap-1 rounded-xs px-2.5 py-1 text-sm sm:text-base font-black font-mono tracking-tight shadow-md"
-                  :class="getTileBadgeClass(item.symbol)"
-                >
-                  <component
-                    v-if="getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod) !== null"
-                    :is="isTilePositive(item.symbol) ? ArrowUp : ArrowDown"
-                    class="h-4 w-4 stroke-[3]"
-                  />
-                  <span>
-                    {{ selectedPeriod }}
-                    <template v-if="getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod) !== null">
-                      {{ isTilePositive(item.symbol) ? '+' : '' }}{{ getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod)!.toFixed(2) }}%
-                    </template>
-                    <template v-else>--</template>
-                  </span>
-                </div>
-              </div>
-
-              <div class="flex items-center justify-between text-[10px] text-zinc-400 border-t border-zinc-800/60 pt-1 font-mono">
-                <span>1D LO: {{ formatQuotePrice(getQuoteFor(item.symbol)?.dayLow) }}</span>
-                <span class="text-zinc-500">|</span>
-                <span>1D HI: {{ formatQuotePrice(getQuoteFor(item.symbol)?.dayHigh) }}</span>
-                <span class="text-zinc-500">|</span>
-                <span>VOL: {{ formatCompactNumber(getQuoteFor(item.symbol)?.volume) }}</span>
-              </div>
-            </template>
-
-            <!-- TIER 2: QUAD 4 (3 to 4 Symbols - Quarter Area) -->
-            <template v-else-if="densityTier === 'quad4'">
-              <div class="flex items-center justify-between">
-                <span class="font-bold text-xs sm:text-sm text-amber-400 tracking-wider">{{ item.symbol }}</span>
-                <div
-                  v-if="getQuoteFor(item.symbol)"
-                  class="inline-flex items-center gap-1 rounded-xs px-2 py-0.5 text-xs sm:text-sm font-black font-mono tracking-tight shadow-sm"
-                  :class="getTileBadgeClass(item.symbol)"
-                >
-                  <component
-                    v-if="getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod) !== null"
-                    :is="isTilePositive(item.symbol) ? ArrowUp : ArrowDown"
-                    class="h-3.5 w-3.5 stroke-[3]"
-                  />
-                  <span>
-                    {{ selectedPeriod }}
-                    <template v-if="getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod) !== null">
-                      {{ isTilePositive(item.symbol) ? '+' : '' }}{{ getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod)!.toFixed(2) }}%
-                    </template>
-                    <template v-else>--</template>
-                  </span>
-                </div>
-              </div>
-
-              <div class="my-auto py-0.5 flex items-baseline justify-between">
-                <span class="text-lg sm:text-xl font-black font-mono text-white">
-                  {{ formatQuotePrice(getQuoteFor(item.symbol)?.price) }}
-                </span>
-                <span
-                  v-if="getQuoteFor(item.symbol)"
-                  class="text-[9px] font-mono font-bold text-amber-400/90 uppercase px-1 py-0.2 bg-zinc-900 border border-zinc-800 rounded-2xs"
-                >
-                  {{ getQuoteFor(item.symbol)?.currency || "USD" }}
-                </span>
-              </div>
-
-              <div class="flex items-center justify-between text-[9px] text-zinc-400 font-mono">
-                <span class="truncate max-w-[90px] text-zinc-400">{{ getQuoteFor(item.symbol)?.name || item.name }}</span>
-                <span>1D HI: {{ formatQuotePrice(getQuoteFor(item.symbol)?.dayHigh) }}</span>
-              </div>
-            </template>
-
-            <!-- TIER 3: MATRIX 8 (5 to 8 Symbols) -->
-            <template v-else-if="densityTier === 'matrix8'">
-              <div class="flex items-center justify-between gap-1">
-                <span class="font-bold text-xs sm:text-sm text-amber-400 tracking-wider shrink-0">{{ item.symbol }}</span>
-                <div
-                  v-if="getQuoteFor(item.symbol)"
-                  class="inline-flex items-center gap-0.5 rounded-xs px-1.5 py-0.5 text-xs sm:text-sm font-black font-mono leading-none tracking-tight shadow-xs"
-                  :class="getTileBadgeClass(item.symbol)"
-                >
-                  <component
-                    v-if="getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod) !== null"
-                    :is="isTilePositive(item.symbol) ? ArrowUp : ArrowDown"
-                    class="h-3.5 w-3.5 stroke-[3] shrink-0"
-                  />
-                  <span>
-                    {{ selectedPeriod }}
-                    <template v-if="getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod) !== null">
-                      {{ isTilePositive(item.symbol) ? '+' : '' }}{{ getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod)!.toFixed(1) }}%
-                    </template>
-                    <template v-else>--</template>
-                  </span>
-                </div>
-              </div>
-
-              <div class="my-auto py-0.5 flex items-baseline justify-between gap-1">
-                <div class="flex items-baseline gap-1">
-                  <span class="text-sm sm:text-base font-black font-mono text-white">
-                    {{ formatQuotePrice(getQuoteFor(item.symbol)?.price) }}
-                  </span>
-                  <span
-                    v-if="getQuoteFor(item.symbol)"
-                    class="text-[8px] font-mono font-bold text-amber-400/80 uppercase"
-                  >
-                    {{ getQuoteFor(item.symbol)?.currency || "USD" }}
-                  </span>
-                </div>
-                <span
-                  v-if="getQuoteFor(item.symbol)"
-                  class="text-[10px] font-mono font-bold"
-                  :class="
-                    getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod) === null
-                      ? 'text-zinc-500'
-                      : isTilePositive(item.symbol)
-                        ? 'text-emerald-400'
-                        : 'text-rose-400'
-                  "
-                >
-                  <template v-if="getQuoteNetChange(getQuoteFor(item.symbol), selectedPeriod) !== null">
-                    {{ isTilePositive(item.symbol) ? '+' : '' }}{{ formatQuotePrice(getQuoteNetChange(getQuoteFor(item.symbol), selectedPeriod)!) }}
-                  </template>
-                  <template v-else>--</template>
-                </span>
-              </div>
-
-              <div class="flex items-center justify-between text-[8px] text-zinc-400 font-mono">
-                <span>1D LO:{{ formatQuotePrice(getQuoteFor(item.symbol)?.dayLow) }}</span>
-                <span>1D HI:{{ formatQuotePrice(getQuoteFor(item.symbol)?.dayHigh) }}</span>
-              </div>
-            </template>
-
-            <!-- TIER 4: DENSE 16 (9 to 16 Symbols - Compact Heat Tile) -->
-            <template v-else>
-              <div class="flex items-center justify-between leading-none gap-0.5">
-                <span class="font-bold text-[10px] text-amber-400 tracking-wide shrink-0">{{ item.symbol }}</span>
-                <div
-                  v-if="getQuoteFor(item.symbol)"
-                  class="inline-flex items-center gap-0.5 text-[9px] font-mono font-black px-1 py-0.5 rounded-2xs leading-none shadow-xs"
-                  :class="getTileBadgeClass(item.symbol)"
-                >
-                  <component
-                    v-if="getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod) !== null"
-                    :is="isTilePositive(item.symbol) ? ArrowUp : ArrowDown"
-                    class="h-2.5 w-2.5 stroke-[3] shrink-0"
-                  />
-                  <span>
-                    {{ selectedPeriod }}
-                    <template v-if="getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod) !== null">
-                      {{ isTilePositive(item.symbol) ? '+' : '' }}{{ getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod)!.toFixed(1) }}%
-                    </template>
-                    <template v-else>--</template>
-                  </span>
-                </div>
-              </div>
-
-              <div class="my-auto flex items-baseline justify-between gap-0.5 leading-tight">
-                <span class="text-xs sm:text-sm font-black font-mono text-white">
-                  {{ formatQuotePrice(getQuoteFor(item.symbol)?.price) }}
-                </span>
-                <span
-                  v-if="getQuoteFor(item.symbol)"
-                  class="text-[8px] font-mono font-bold text-amber-400/80 uppercase"
-                >
-                  {{ getQuoteFor(item.symbol)?.currency || "USD" }}
-                </span>
-              </div>
-            </template>
+            <div class="mo-tile-heading flex min-w-0 items-center justify-between gap-1">
+              <span class="mo-tile-symbol font-bold text-amber-400" :title="item.symbol">{{ item.symbol }}</span>
+              <span class="mo-tile-secondary truncate text-[10px] text-zinc-400">{{ getQuoteFor(item.symbol)?.name || item.name }}</span>
+            </div>
+            <div class="mo-tile-price font-black text-white">
+              {{ formatQuotePrice(getQuoteFor(item.symbol)?.price) }}
+              <span class="mo-tile-secondary text-[10px] text-amber-400">{{ getQuoteFor(item.symbol)?.currency }}</span>
+            </div>
+            <div class="mo-tile-change inline-flex w-fit max-w-full items-center gap-1 rounded-xs px-1.5 py-0.5 font-bold" :class="getTileBadgeClass(item.symbol)">
+              <component
+                v-if="getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod) !== null"
+                :is="isTilePositive(item.symbol) ? ArrowUp : ArrowDown"
+                class="h-3 w-3 shrink-0"
+              />
+              <span>{{ getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod) === null ? '--' : `${isTilePositive(item.symbol) ? '+' : ''}${getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod)!.toFixed(2)}%` }}</span>
+            </div>
           </div>
         </TransitionGroup>
 
@@ -873,6 +702,87 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.mo-stock-root {
+  container: stock / size;
+}
+.mo-stock-header {
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+.mo-stock-header > div {
+  min-width: 0;
+  max-width: 100%;
+}
+.mo-stock-actions {
+  margin-left: auto;
+}
+.mo-stock-tiles {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.mo-stock-tile {
+  gap: 0.25rem;
+}
+.mo-tile-symbol {
+  font-size: clamp(0.625rem, 3cqw, 0.875rem);
+  overflow-wrap: anywhere;
+}
+.mo-tile-price {
+  font-size: clamp(0.75rem, 4.5cqw, 1.5rem);
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+.mo-tile-change {
+  font-size: clamp(0.625rem, 2.8cqw, 0.875rem);
+  line-height: 1.2;
+}
+.mo-stock-detail > * {
+  flex-shrink: 0;
+  min-width: 0;
+}
+.mo-stock-hero {
+  flex-wrap: wrap;
+}
+.mo-detail-price {
+  font-size: clamp(1.25rem, 8cqw, 3rem);
+  overflow-wrap: anywhere;
+}
+.mo-stock-hero > div, .mo-stock-hero > div > div {
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.mo-stock-range > div:first-child {
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+.mo-stock-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.mo-matrix-card p {
+  overflow-wrap: anywhere;
+}
+.mo-stock-loading, .mo-stock-error {
+  min-height: 0;
+  overflow-y: auto;
+}
+.mo-stock-loading > div > div {
+  max-width: 100%;
+}
+@container stock (max-width: 440px) {
+  .mo-tile-secondary { display: none; }
+  .mo-stock-header { font-size: 0.625rem; }
+  .mo-stock-header .tracking-wider { letter-spacing: normal; }
+}
+@container stock (max-width: 320px) {
+  .mo-stock-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mo-stock-hero { flex-direction: column; align-items: flex-start; }
+  .mo-stock-hero > div:last-child { align-items: flex-start; text-align: left; }
+}
+@container stock (max-height: 320px) {
+  .mo-stock-view { gap: 0.25rem; }
+  .mo-stock-tile { padding: 0.25rem; gap: 0.125rem; }
+  .mo-tile-secondary { display: none; }
+}
+
 /* 1. View Morph: Terminal Detail <-> Matrix Grid */
 .stock-view-morph-enter-active,
 .stock-view-morph-leave-active {

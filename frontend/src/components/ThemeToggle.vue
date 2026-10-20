@@ -39,6 +39,7 @@ function labelFor(pref: ThemePreference): string {
     <DropdownMenuPortal>
       <DropdownMenuContent
         :side-offset="8"
+        :collision-padding="16"
         align="end"
         class="fe-theme-menu z-50 w-44 rounded-xl border border-border bg-popover p-1.5 text-popover-foreground shadow-md outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
       >

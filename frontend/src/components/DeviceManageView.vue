@@ -186,7 +186,7 @@ watch(
     <!-- Device Details Card -->
     <div class="fe-manage-header-card rounded-xl border border-border bg-card p-5 text-card-foreground shadow-sm sm:p-6">
       <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div class="flex items-start gap-3.5">
+        <div class="flex min-w-0 flex-1 items-start gap-3.5">
           <span
             class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
           >
@@ -194,7 +194,7 @@ watch(
           </span>
           <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-2.5">
-              <h1 class="truncate text-lg font-semibold text-foreground">
+              <h1 class="break-words [overflow-wrap:anywhere] text-lg font-semibold text-foreground">
                 {{ device.device_name }}
               </h1>
               <span
@@ -211,7 +211,7 @@ watch(
 
         <button
           type="button"
-          class="inline-flex items-center justify-center gap-1.5 self-start sm:self-center rounded-lg border border-border px-3.5 py-2 text-xs font-medium text-destructive transition hover:bg-destructive/10 disabled:opacity-60"
+          class="inline-flex shrink-0 items-center justify-center gap-1.5 self-start sm:self-center rounded-lg border border-border px-3.5 py-2 text-xs font-medium text-destructive transition hover:bg-destructive/10 disabled:opacity-60"
           :disabled="revoking"
           @click="handleRevoke"
         >
@@ -232,7 +232,7 @@ watch(
 
     <!-- Widgets Configuration Card -->
     <div class="fe-manage-widgets-card rounded-xl border border-border bg-card p-5 text-card-foreground shadow-sm sm:p-6">
-      <div class="flex items-center justify-between border-b border-border/80 pb-4">
+      <div class="flex flex-wrap items-center justify-between gap-4 border-b border-border/80 pb-4">
         <div>
           <h2 class="text-base font-semibold leading-tight text-foreground">Device Widgets</h2>
           <p class="mt-0.5 text-xs text-muted-foreground">
@@ -254,8 +254,9 @@ watch(
           <DropdownMenuPortal>
             <DropdownMenuContent
               :side-offset="8"
+              :collision-padding="16"
               align="end"
-              class="z-50 w-64 rounded-xl border border-border bg-popover p-1.5 text-popover-foreground shadow-md outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
+              class="z-50 max-h-[var(--reka-dropdown-menu-content-available-height)] max-w-[calc(100vw-2rem)] overflow-y-auto w-64 rounded-xl border border-border bg-popover p-1.5 text-popover-foreground shadow-md outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
             >
               <DropdownMenuItem
                 class="flex cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
@@ -299,7 +300,7 @@ watch(
         class="mt-6 rounded-xl border border-dashed border-border p-8 text-center text-xs text-muted-foreground"
       >
         <p class="font-medium text-foreground text-sm">No widgets active</p>
-        <p class="mt-1">Click "Add widget" above to display the weather widget on this mobile device.</p>
+        <p class="mt-1">Click "Add widget" above to display weather or market widgets on this mobile device.</p>
       </div>
 
       <ul v-else class="mt-4 space-y-2.5">
@@ -308,7 +309,7 @@ watch(
           :key="widget.widget_key"
           class="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition hover:border-border/90"
         >
-          <div class="flex items-center gap-3.5">
+          <div class="flex flex-wrap items-center gap-3.5">
             <span
               class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"
             >
@@ -331,13 +332,13 @@ watch(
                 :aria-checked="widget.enabled"
                 :aria-label="`Turn ${getWidgetDefinition(widget.widget_key)?.label ?? widget.widget_key} on or off`"
                 :disabled="saving"
-                class="relative h-5.5 w-10 shrink-0 rounded-full transition-colors disabled:opacity-60"
+                class="relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-60"
                 :class="widget.enabled ? 'bg-primary' : 'bg-muted'"
                 @click="handleToggle(widget)"
               >
                 <span
-                  class="absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow transition-all"
-                  :class="widget.enabled ? 'left-5' : 'left-0.5'"
+                  class="absolute top-0.5 h-5 w-5 rounded-full shadow transition-all"
+                  :class="widget.enabled ? 'left-5.5 bg-primary-foreground' : 'left-0.5 bg-foreground'"
                 />
               </button>
               <button
@@ -357,7 +358,7 @@ watch(
             v-if="widget.widget_key === 'weather'"
             class="border-t border-border/60 pt-3"
           >
-            <div class="flex items-center justify-between mb-2">
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
               <span class="text-xs font-medium text-muted-foreground">Configured Cities</span>
               <button
                 type="button"
@@ -374,13 +375,13 @@ watch(
               <span
                 v-for="(cityItem, idx) in weatherCities(widget)"
                 :key="`${cityItem.latitude}-${cityItem.longitude}-${idx}`"
-                class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-foreground shadow-2xs"
+                class="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-foreground shadow-2xs"
               >
                 <MapPin class="h-3 w-3 text-primary shrink-0" />
                 <span class="truncate max-w-[150px]">{{ cityItem.city }}{{ cityItem.country ? `, ${cityItem.country}` : '' }}</span>
                 <button
                   type="button"
-                  class="ml-0.5 rounded-sm p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition"
+                  class="ml-0.5 shrink-0 rounded-sm p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition"
                   aria-label="Remove city"
                   :disabled="saving"
                   @click="handleRemoveCity(idx)"
@@ -399,27 +400,30 @@ watch(
             v-if="widget.widget_key === 'stock'"
             class="border-t border-border/60 pt-3"
           >
-            <div class="flex items-center justify-between mb-2">
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
               <span class="text-xs font-medium text-muted-foreground">
-                Configured Watchlist ({{ stockSymbols(widget).length }}/16)
+                Configured Watchlist ({{ stockSymbols(widget).length }}/4)
               </span>
               <button
                 type="button"
                 class="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary hover:bg-primary/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                :disabled="saving || stockSymbols(widget).length >= 16"
-                :title="stockSymbols(widget).length >= 16 ? 'Maximum 16 symbols reached' : 'Add Stock Symbol'"
+                :disabled="saving || stockSymbols(widget).length >= 4"
+                :title="stockSymbols(widget).length >= 4 ? 'Maximum 4 symbols reached' : 'Add Stock Symbol'"
                 @click="showStockModal = true"
               >
                 <Plus class="h-3.5 w-3.5" />
-                <span>{{ stockSymbols(widget).length >= 16 ? 'Limit Reached (16)' : 'Add Symbol' }}</span>
+                <span>{{ stockSymbols(widget).length >= 4 ? 'Limit Reached (4)' : 'Add Symbol' }}</span>
               </button>
             </div>
 
+            <p v-if="stockSymbols(widget).length > 4" class="mb-2 text-xs text-muted-foreground">
+              Mobile displays the first 4 stocks. Your other stocks are still saved; remove entries below to change which stocks appear.
+            </p>
             <div v-if="stockSymbols(widget).length > 0" class="flex flex-wrap gap-2">
               <span
                 v-for="(symItem, idx) in stockSymbols(widget)"
                 :key="`${symItem.symbol}-${idx}`"
-                class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-foreground shadow-2xs"
+                class="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-foreground shadow-2xs"
               >
                 <TrendingUp class="h-3 w-3 text-primary shrink-0" />
                 <span class="truncate max-w-[150px] font-mono font-semibold">{{ symItem.symbol }}</span>
@@ -432,7 +436,7 @@ watch(
                 <span v-if="symItem.name" class="text-muted-foreground truncate max-w-[120px] text-[11px]">({{ symItem.name }})</span>
                 <button
                   type="button"
-                  class="ml-0.5 rounded-sm p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition"
+                  class="ml-0.5 shrink-0 rounded-sm p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition"
                   aria-label="Remove symbol"
                   :disabled="saving"
                   @click="handleRemoveStock(idx)"

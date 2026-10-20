@@ -9,26 +9,15 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "reka-ui";
-import { ChevronDown, LayoutDashboard, LogOut, Menu, Smartphone, X } from "@lucide/vue";
+import { ChevronDown, LayoutDashboard, LogOut, Smartphone } from "@lucide/vue";
 import { useAuth } from "../composables/useAuth";
 import GoogleSignInButton from "./GoogleSignInButton.vue";
 import ThemeToggle from "./ThemeToggle.vue";
 import AddDeviceModal from "./AddDeviceModal.vue";
 
 const { user, isLoggedIn, authError, signOut } = useAuth();
-const mobileOpen = ref(false);
 const showAddDevice = ref(false);
 
-function closeMobile(): void {
-  mobileOpen.value = false;
-}
-
-function handleSignOut(): void {
-  closeMobile();
-  signOut();
-}
-
-const navLinks = [{ label: "Overview", href: "#", active: true }] as const;
 </script>
 
 <template>
@@ -36,7 +25,7 @@ const navLinks = [{ label: "Overview", href: "#", active: true }] as const;
     <div
       class="fe-topnav-container mx-auto flex h-[var(--topbar-h)] w-full max-w-[var(--container-max)] items-center justify-between gap-3 px-4 sm:px-6"
     >
-      <!-- Brand + desktop nav -->
+      <!-- Brand -->
       <div class="fe-topnav-brand-wrap flex min-w-0 items-center gap-6">
         <a href="#" class="fe-topnav-brand-link flex shrink-0 items-center gap-2.5" aria-label="Dashboard home">
           <span
@@ -47,23 +36,12 @@ const navLinks = [{ label: "Overview", href: "#", active: true }] as const;
           <span class="fe-topnav-brand-title text-[15px] font-semibold tracking-tight text-foreground">Dashboard</span>
         </a>
 
-        <nav class="fe-topnav-desktop-nav hidden items-center gap-1 md:flex" aria-label="Primary">
-          <a
-            v-for="link in navLinks"
-            :key="link.label"
-            :href="link.href"
-            :aria-current="link.active ? 'page' : undefined"
-            :class="['fe-topnav-desktop-link', 'nav-link', link.active && 'nav-link-active']"
-          >
-            {{ link.label }}
-          </a>
-        </nav>
       </div>
 
-      <!-- Right: auth + mobile toggle -->
+      <!-- Account actions -->
       <div class="fe-topnav-actions flex shrink-0 items-center gap-2">
         <ThemeToggle />
-        <GoogleSignInButton v-if="!isLoggedIn" />
+        <GoogleSignInButton v-if="!isLoggedIn" class="hidden sm:flex" />
 
         <template v-else>
           <button
@@ -103,8 +81,9 @@ const navLinks = [{ label: "Overview", href: "#", active: true }] as const;
             <DropdownMenuPortal>
               <DropdownMenuContent
                 :side-offset="8"
+                :collision-padding="16"
                 align="end"
-                class="fe-topnav-profile-menu z-50 w-64 rounded-xl border border-border bg-popover p-1.5 text-popover-foreground shadow-md outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
+                class="fe-topnav-profile-menu z-50 max-h-[var(--reka-dropdown-menu-content-available-height)] max-w-[calc(100vw-2rem)] overflow-y-auto w-64 rounded-xl border border-border bg-popover p-1.5 text-popover-foreground shadow-md outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
               >
                 <DropdownMenuLabel class="fe-topnav-profile-menu-label px-2.5 py-2">
                   <p class="fe-topnav-profile-name truncate text-sm font-medium text-foreground">
@@ -122,7 +101,7 @@ const navLinks = [{ label: "Overview", href: "#", active: true }] as const;
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   class="fe-topnav-profile-signout-item flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
-                  @select="handleSignOut"
+                  @select="signOut"
                 >
                   <LogOut class="fe-topnav-profile-signout-icon h-4 w-4 text-muted-foreground" aria-hidden="true" />
                   Sign out
@@ -132,40 +111,9 @@ const navLinks = [{ label: "Overview", href: "#", active: true }] as const;
           </DropdownMenuRoot>
         </template>
 
-        <button
-          type="button"
-          class="fe-topnav-mobile-toggle inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:hidden"
-          :aria-expanded="mobileOpen"
-          aria-controls="mobile-nav"
-          aria-label="Toggle navigation menu"
-          @click="mobileOpen = !mobileOpen"
-        >
-          <Menu v-if="!mobileOpen" class="fe-topnav-mobile-menu-icon h-5 w-5" aria-hidden="true" />
-          <X v-else class="fe-topnav-mobile-close-icon h-5 w-5" aria-hidden="true" />
-        </button>
       </div>
     </div>
 
-    <!-- Mobile nav -->
-    <nav
-      v-if="mobileOpen"
-      id="mobile-nav"
-      class="fe-topnav-mobile-nav border-t border-border bg-background px-4 py-3 md:hidden"
-      aria-label="Mobile"
-    >
-      <div class="fe-topnav-mobile-nav-list flex flex-col gap-1">
-        <a
-          v-for="link in navLinks"
-          :key="link.label"
-          :href="link.href"
-          :aria-current="link.active ? 'page' : undefined"
-          :class="['fe-topnav-mobile-nav-link', 'nav-link w-full justify-start', link.active && 'nav-link-active']"
-          @click="closeMobile"
-        >
-          {{ link.label }}
-        </a>
-      </div>
-    </nav>
 
     <p
       v-if="authError && !isLoggedIn"

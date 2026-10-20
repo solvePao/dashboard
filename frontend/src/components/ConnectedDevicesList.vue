@@ -18,9 +18,9 @@ function handleManage(device: DeviceItem): void {
 
 <template>
   <div class="fe-devices-card rounded-xl border border-border bg-card p-5 text-card-foreground shadow-sm sm:p-6">
-    <div class="fe-devices-header flex items-center justify-between border-b border-border/80 pb-4">
-      <div class="fe-devices-header-left flex items-center gap-2.5">
-        <span class="fe-devices-header-icon flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+    <div class="fe-devices-header flex flex-wrap items-center justify-between gap-4 border-b border-border/80 pb-4">
+      <div class="fe-devices-header-left flex min-w-0 flex-1 items-center gap-2.5">
+        <span class="fe-devices-header-icon flex shrink-0 h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
           <Smartphone class="fe-devices-header-glyph h-5 w-5" />
         </span>
         <div class="fe-devices-header-text">
@@ -35,7 +35,7 @@ function handleManage(device: DeviceItem): void {
 
       <button
         type="button"
-        class="fe-devices-add-btn inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground shadow-xs transition hover:bg-primary/90"
+        class="fe-devices-add-btn inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground shadow-xs transition hover:bg-primary/90"
         @click="emit('add-device')"
       >
         <Smartphone class="fe-devices-add-btn-icon h-3.5 w-3.5" />

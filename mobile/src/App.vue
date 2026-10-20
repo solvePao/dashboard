@@ -11,7 +11,7 @@ import type { SplitRatio } from "./types/layout";
 
 const ratio: SplitRatio = "50-50";
 const { init, isAuthenticated } = useDeviceAuth();
-useOrientationLock();
+const { isFullscreen, fullscreenSupported, fullscreenPending, fullscreenError, toggleFullscreen } = useOrientationLock();
 
 const showSettingsModal = ref(false);
 
@@ -49,6 +49,11 @@ onMounted(() => {
     <!-- Settings & Profile Modal -->
     <DeviceSettingsModal
       :open="showSettingsModal"
+      :is-fullscreen="isFullscreen"
+      :fullscreen-supported="fullscreenSupported"
+      :fullscreen-pending="fullscreenPending"
+      :fullscreen-error="fullscreenError"
+      @toggle-fullscreen="toggleFullscreen"
       @close="showSettingsModal = false"
     />
   </div>

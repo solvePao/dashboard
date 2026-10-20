@@ -1,4 +1,14 @@
 @layer components {
+  :is(.fe-app-main, .fe-dialog) :is(button, a, input, select):focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+  .fe-dialog button[aria-label="Close"] {
+    @apply shrink-0;
+  }
+  .fe-dialog :is(input, select) {
+    @apply min-w-0;
+  }
+
   .nav-link {
     @apply inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1;
   }

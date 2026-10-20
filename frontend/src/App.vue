@@ -6,7 +6,7 @@ import ConnectedDevicesList from "./components/ConnectedDevicesList.vue";
 import DeviceManageView from "./components/DeviceManageView.vue";
 import AddDeviceModal from "./components/AddDeviceModal.vue";
 import UserProfileCard from "./components/UserProfileCard.vue";
-import SignInPrompt from "./components/SignInPrompt.vue";
+import WelcomePage from "./components/WelcomePage.vue";
 import { useAuth } from "./composables/useAuth";
 import { useDevices } from "./composables/useDevices";
 import type { DeviceItem } from "./types/device";
@@ -28,6 +28,13 @@ function handleManageBack(): void {
 function handleDeviceRevoked(): void {
   managedDevice.value = null;
 }
+
+watch(isLoggedIn, (loggedIn) => {
+  if (!loggedIn) {
+    managedDevice.value = null;
+    showAddDeviceModal.value = false;
+  }
+});
 
 // Exit manage view if the device was revoked or deleted from list
 watch(devices, (list) => {
@@ -62,7 +69,7 @@ watch(devices, (list) => {
       />
     </template>
 
-    <SignInPrompt v-else />
+    <WelcomePage v-else />
   </main>
 
   <!-- Footer is hidden when managing a device -->

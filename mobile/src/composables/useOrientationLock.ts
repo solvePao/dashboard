@@ -4,6 +4,9 @@ import { logger } from "../lib/logger";
 export function useOrientationLock() {
   const isPortrait = ref(false);
   const isFullscreen = ref(false);
+  const fullscreenSupported = ref(false);
+  const fullscreenPending = ref(false);
+  const fullscreenError = ref<string | null>(null);
   const lockSupported = ref(false);
   const isLocked = ref(false);
 
@@ -12,6 +15,7 @@ export function useOrientationLock() {
     const portraitMedia = window.matchMedia("(orientation: portrait)");
     isPortrait.value = portraitMedia.matches;
     isFullscreen.value = Boolean(document.fullscreenElement);
+    fullscreenSupported.value = Boolean(document.fullscreenEnabled && document.documentElement.requestFullscreen);
   }
 
   async function attemptLockLandscape() {
@@ -31,7 +35,13 @@ export function useOrientationLock() {
   }
 
   async function toggleFullscreen() {
-    if (typeof document === "undefined") return;
+    if (typeof document === "undefined" || fullscreenPending.value) return;
+    fullscreenError.value = null;
+    if (!document.fullscreenElement && !fullscreenSupported.value) {
+      fullscreenError.value = "Fullscreen is not available in this browser.";
+      return;
+    }
+    fullscreenPending.value = true;
     try {
       if (!document.fullscreenElement) {
         await document.documentElement.requestFullscreen();
@@ -42,7 +52,11 @@ export function useOrientationLock() {
         isFullscreen.value = false;
       }
     } catch (err) {
+      fullscreenError.value = "Could not change fullscreen. Please try again from this button.";
       logger.warn("orientation", "Fullscreen toggle failed", err);
+    } finally {
+      checkOrientation();
+      fullscreenPending.value = false;
     }
   }
 
@@ -74,6 +88,9 @@ export function useOrientationLock() {
   return {
     isPortrait,
     isFullscreen,
+    fullscreenSupported,
+    fullscreenPending,
+    fullscreenError,
     lockSupported,
     isLocked,
     toggleFullscreen,

@@ -137,8 +137,8 @@ export function useDeviceWidgets(deviceToken: string) {
     const symUpper = symbolItem.symbol.trim().toUpperCase();
     const duplicate = currentSymbols.some((s) => s.symbol.toUpperCase() === symUpper);
     if (!duplicate) {
-      if (currentSymbols.length >= 16) {
-        widgetsError.value = "Maximum 16 stock symbols allowed per device.";
+      if (currentSymbols.length >= 4) {
+        widgetsError.value = "Maximum 4 stock symbols allowed per device.";
         return false;
       }
       currentSymbols.push({
