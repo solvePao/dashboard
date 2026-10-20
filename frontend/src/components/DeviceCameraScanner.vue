@@ -75,18 +75,18 @@ defineExpose({
 </script>
 
 <template>
-  <div class="mt-5 flex flex-col items-center">
+  <div class="fe-scanner-root mt-5 flex flex-col items-center">
     <div
       v-if="cameraStarting"
-      class="flex h-56 w-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-muted/40 text-xs text-muted-foreground"
+      class="fe-scanner-starting flex h-56 w-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-muted/40 text-xs text-muted-foreground"
     >
-      <Loader2 class="h-6 w-6 animate-spin text-primary" />
-      <span>Starting webcam...</span>
+      <Loader2 class="fe-scanner-starting-icon h-6 w-6 animate-spin text-primary" />
+      <span class="fe-scanner-starting-text">Starting webcam...</span>
     </div>
 
     <div
       v-if="cameraError"
-      class="rounded-xl border border-destructive/20 bg-destructive/10 p-3 text-xs text-destructive text-center mb-3"
+      class="fe-scanner-error rounded-xl border border-destructive/20 bg-destructive/10 p-3 text-xs text-destructive text-center mb-3"
     >
       {{ cameraError }}
     </div>
@@ -94,11 +94,11 @@ defineExpose({
     <div
       id="qr-reader"
       ref="readerEl"
-      class="w-full overflow-hidden rounded-xl border border-border bg-black/90 shadow-inner"
+      class="fe-scanner-reader w-full overflow-hidden rounded-xl border border-border bg-black/90 shadow-inner"
       style="min-height: 240px"
     ></div>
 
-    <p class="mt-3 text-center text-xs text-muted-foreground">
+    <p class="fe-scanner-hint mt-3 text-center text-xs text-muted-foreground">
       Point your webcam towards the QR code on your mobile screen.
     </p>
   </div>

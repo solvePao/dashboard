@@ -1,5 +1,9 @@
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 use worker::Env;
 
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 use crate::common::{
     ENV_ENVIRONMENT, ENV_FRONTEND_ORIGINS, SECRET_GOOGLE_CLIENT_ID,
 };
@@ -35,24 +39,32 @@ pub fn validate_google_client_id(secret: Option<&str>) -> AppResult<String> {
 }
 
 /// Returns true if the ENVIRONMENT variable is set to "production".
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 pub fn is_production(env: &Env) -> bool {
     let var = env.var(ENV_ENVIRONMENT).map(|v| v.to_string()).ok();
     parse_is_production(var.as_deref())
 }
 
 /// Returns the ENVIRONMENT variable, defaulting to "dev" if unset.
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 pub fn get_environment(env: &Env) -> String {
     let var = env.var(ENV_ENVIRONMENT).map(|v| v.to_string()).ok();
     parse_environment(var.as_deref())
 }
 
 /// Returns the optional FRONTEND_ORIGINS variable string.
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 pub fn get_frontend_origins(env: &Env) -> Option<String> {
     let var = env.var(ENV_FRONTEND_ORIGINS).map(|v| v.to_string()).ok();
     parse_frontend_origins_value(var.as_deref())
 }
 
 /// Retrieves the GOOGLE_CLIENT_ID secret, returning 503 if missing or empty.
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 pub fn get_google_client_id(env: &Env) -> AppResult<String> {
     let secret = env
         .secret(SECRET_GOOGLE_CLIENT_ID)

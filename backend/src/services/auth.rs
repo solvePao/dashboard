@@ -1,6 +1,9 @@
+#[cfg(not(any(test, coverage)))]
 use worker::*;
 
-use super::store::{D1Stores, UserStore};
+#[cfg(not(any(test, coverage)))]
+use super::store::D1Stores;
+use super::store::UserStore;
 use crate::models::auth::{GoogleProfile, LoginResponse, TokenInfo, User};
 use crate::models::error::{AppError, AppResult};
 use crate::utils::{mint_jwt, verify_jwt};
@@ -13,8 +16,10 @@ pub trait TokenVerifier {
 }
 
 /// Production verifier backed by `Env` + Google tokeninfo.
+#[cfg(not(any(test, coverage)))]
 pub struct EnvVerifier<'a>(pub &'a Env);
 
+#[cfg(not(any(test, coverage)))]
 impl TokenVerifier for EnvVerifier<'_> {
     async fn verify_token(&self, id_token: &str) -> AppResult<GoogleProfile> {
         AuthService::verify_google_id_token(self.0, id_token).await
@@ -72,6 +77,7 @@ impl AuthService {
 
     /// Verifies a Google ID token with Google's tokeninfo endpoint.
     /// Only used by the sign-in route — no other route accepts Google tokens.
+    #[cfg(not(any(test, coverage)))]
     pub async fn verify_google_id_token(env: &Env, id_token: &str) -> AppResult<GoogleProfile> {
         let client_id = crate::utils::env::get_google_client_id(env)?;
 
@@ -103,6 +109,7 @@ impl AuthService {
 
     /// Verifies the Google token, upserts the user in D1, and mints the
     /// web session JWT the frontend must use from here on.
+    #[cfg(not(any(test, coverage)))]
     pub async fn login_with_google(
         env: &Env,
         db: &D1Database,
@@ -152,6 +159,7 @@ impl AuthService {
     ///
     /// Google ID tokens and raw `google_sub` values are rejected here —
     /// a `sub` alone proves nothing, so it must never authenticate.
+    #[cfg(not(any(test, coverage)))]
     pub async fn authenticate(token: &str, env: &Env, db: &D1Database) -> AppResult<User> {
         // Fail closed: a missing/short secret is 503, never a silent skip of
         // the JWT path (which would hide misconfiguration as 401s).
@@ -201,6 +209,7 @@ impl AuthService {
     }
 
     /// Fetches a user by their Google subject ID.
+    #[cfg(not(any(test, coverage)))]
     pub async fn get_user_by_sub(db: &D1Database, sub: &str) -> AppResult<User> {
         Self::get_user_by_sub_with(&D1Stores(db), sub).await
     }

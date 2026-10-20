@@ -52,3 +52,14 @@ wrangler secret put JWT_SECRET
 wrangler deploy
 ```
 Then point the frontend at the worker URL via `VITE_API_URL`.
+
+## Testing & Coverage
+To run the full suite of backend integration and unit tests:
+```bash
+make test-api
+```
+
+To run coverage and strictly enforce 100% test coverage across regions, functions, and lines:
+```bash
+make test-coverage
+```

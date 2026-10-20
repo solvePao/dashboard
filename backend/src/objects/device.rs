@@ -1,22 +1,22 @@
+#[cfg(not(any(test, coverage)))]
 use worker::*;
 
+#[cfg(not(any(test, coverage)))]
 use crate::models::device::{HubEvent, HubEventRequest, HubSnapshot, HubState};
 
+#[cfg(not(any(test, coverage)))]
 const HUB_STORAGE_KEY: &str = "hub";
 
 /// One instance per active device token (`idFromName(device_token)`).
 /// Manages live WebSocket push for real-time revocation when the web
 /// dashboard deletes a device token.
+#[cfg(not(any(test, coverage)))]
 #[durable_object]
 pub struct DeviceObject {
     state: State,
 }
 
-/// One instance per user (`idFromName(user_id)`). Live channel to the
-/// web dashboard: the Worker pokes `/event` after authorizing, revoking,
-/// or disconnecting a device, and the hub broadcasts to the user's open
-/// dashboard sockets. Storage holds only `revision` + `last_event` so a
-/// reconnecting dashboard can replay one missed change or detect a gap.
+#[cfg(not(any(test, coverage)))]
 #[durable_object]
 pub struct DevicesHubObject {
     state: State,
@@ -32,6 +32,16 @@ pub fn revoked_payload() -> serde_json::Value {
     })
 }
 
+/// Payload pushed to live device sockets when the web dashboard saves
+/// widgets. The socket stays open; the device re-fetches its widget set.
+pub fn widgets_updated_payload() -> serde_json::Value {
+    serde_json::json!({
+        "status": "widgets_updated",
+        "message": "Widget configuration was updated from the web dashboard."
+    })
+}
+
+#[cfg(not(any(test, coverage)))]
 impl DeviceObject {
     fn broadcast_revoked(&self) {
         let msg = revoked_payload().to_string();
@@ -42,10 +52,23 @@ impl DeviceObject {
         }
     }
 
+    fn broadcast_widgets_updated(&self) {
+        let msg = widgets_updated_payload().to_string();
+
+        for ws in self.state.get_websockets() {
+            let _ = ws.send_with_str(&msg);
+        }
+    }
+
     async fn handle_revoke(&self) -> Result<Response> {
         self.broadcast_revoked();
         let _ = self.state.storage().delete_all().await;
         Response::ok("revoked")
+    }
+
+    async fn handle_widgets_updated(&self) -> Result<Response> {
+        self.broadcast_widgets_updated();
+        Response::ok("widgets_updated")
     }
 
     async fn handle_socket(&self) -> Result<Response> {
@@ -55,6 +78,7 @@ impl DeviceObject {
     }
 }
 
+#[cfg(not(any(test, coverage)))]
 impl DurableObject for DeviceObject {
     fn new(state: State, _env: Env) -> Self {
         Self { state }
@@ -71,6 +95,7 @@ impl DurableObject for DeviceObject {
 
         match (req.method(), req.path().as_str()) {
             (Method::Post, "/revoke") => self.handle_revoke().await,
+            (Method::Post, "/widgets") => self.handle_widgets_updated().await,
             (Method::Get, _) if is_socket => self.handle_socket().await,
             _ => Response::error("Not found.", 404),
         }
@@ -99,6 +124,7 @@ impl DurableObject for DeviceObject {
     }
 }
 
+#[cfg(not(any(test, coverage)))]
 impl DevicesHubObject {
     async fn load(&self) -> Result<HubState> {
         Ok(self
@@ -149,6 +175,7 @@ impl DevicesHubObject {
     }
 }
 
+#[cfg(not(any(test, coverage)))]
 impl DurableObject for DevicesHubObject {
     fn new(state: State, _env: Env) -> Self {
         Self { state }

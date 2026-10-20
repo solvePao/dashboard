@@ -6,3 +6,5 @@ mod device_test;
 mod pairing_test;
 #[path = "services/validation_test.rs"]
 mod validation_test;
+#[path = "services/widget_test.rs"]
+mod widget_test;

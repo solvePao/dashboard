@@ -97,6 +97,36 @@ pub struct RevokeResponse {
     pub revoked: bool,
 }
 
+/// One configured widget on a device. `config` is an opaque JSON object
+/// interpreted by the frontends (e.g. weather holds the selected city
+/// plus its latitude/longitude), so new widget types need no backend
+/// change — only a new `widget_key`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DeviceWidget {
+    pub widget_key: String,
+    pub enabled: bool,
+    pub config: serde_json::Value,
+}
+
+/// Single item of the `PUT /api/devices/:token/widgets` body. Options
+/// (not required fields) so service validation reports precise errors.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WidgetSaveItem {
+    pub widget_key: Option<String>,
+    pub enabled: Option<bool>,
+    pub config: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SaveWidgetsRequest {
+    pub widgets: Option<Vec<WidgetSaveItem>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WidgetsResponse {
+    pub widgets: Vec<DeviceWidget>,
+}
+
 /// Worker -> hub object: one lifecycle change (authorize/revoke/disconnect).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HubEventRequest {

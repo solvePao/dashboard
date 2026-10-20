@@ -28,12 +28,12 @@ watch(isDark, renderButton);
 </script>
 
 <template>
-  <div class="flex items-center" style="color-scheme: light;">
-    <div ref="buttonEl" style="color-scheme: light;"></div>
-    <p v-if="!googleClientId" class="py-1 text-xs text-muted-foreground">
+  <div class="fe-gsi-root flex items-center" style="color-scheme: light;">
+    <div ref="buttonEl" class="fe-gsi-button-slot" style="color-scheme: light;"></div>
+    <p v-if="!googleClientId" class="fe-gsi-missing py-1 text-xs text-muted-foreground">
       Google login is not configured.
     </p>
-    <p v-else-if="loadError" class="py-1 text-xs text-destructive">
+    <p v-else-if="loadError" class="fe-gsi-error py-1 text-xs text-destructive">
       {{ loadError }}
     </p>
   </div>

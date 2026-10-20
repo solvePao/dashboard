@@ -113,3 +113,67 @@ fn expiry_sql_fragments_are_present_in_builders() {
         assert!(sql.contains(SQL_NOW), "missing SQL_NOW in {sql}");
     }
 }
+
+#[test]
+fn widget_sql_builders() {
+    let owner = device_token_owner_sql();
+    assert!(owner.contains("FROM device_tokens"));
+    assert!(owner.contains("token = ?1"));
+    assert!(owner.contains(SQL_NOW));
+    let get = get_device_widgets_sql();
+    assert!(get.contains("FROM device_widgets"));
+    assert!(get.contains("token = ?1"));
+    assert!(get.contains("ORDER BY widget_key ASC"));
+    let del = delete_device_widgets_sql();
+    assert!(del.contains("DELETE FROM device_widgets"));
+    let up = upsert_device_widget_sql();
+    assert!(up.contains("device_widgets"));
+    assert!(up.contains("ON CONFLICT(token, widget_key)"));
+    assert!(up.contains(SQL_NOW));
+}
+
+#[test]
+fn widget_sql_runs_end_to_end() {
+    // rusqlite is real SQLite, so the production builder SQL
+    // (strftime fragments included) runs unmodified here.
+    let conn = memory_db();
+    conn.execute("INSERT INTO users (google_sub, email) VALUES ('sub-1', 'a@x.com')", []).unwrap();
+    let user_id: i64 =
+        conn.query_row("SELECT id FROM users WHERE google_sub = 'sub-1'", [], |r| r.get(0)).unwrap();
+    conn.execute(
+        "INSERT INTO device_tokens (token, user_id, device_name, expires_at, created_at, last_used_at) VALUES ('tok-1', ?1, 'Phone', '2099-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+        rusqlite::params![user_id],
+    )
+    .unwrap();
+
+    let owner: i64 = conn
+        .query_row(&device_token_owner_sql().replace(SQL_NOW, "'2026-06-01T00:00:00.000Z'"), ["tok-1"], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(owner, user_id);
+
+    // Replace semantics: delete-then-upsert, empty list clears all.
+    conn.execute(&delete_device_widgets_sql(), ["tok-1"]).unwrap();
+    for (key, enabled, config) in [("weather", 1, r#"{"city":"Oslo"}"#), ("stocks", 0, "{}")] {
+        conn.execute(
+            &upsert_device_widget_sql(),
+            rusqlite::params!["tok-1", key, enabled, config],
+        )
+        .unwrap();
+    }
+    let mut stmt = conn.prepare(&get_device_widgets_sql()).unwrap();
+    let rows: Vec<(String, i64, String)> = stmt
+        .query_map(["tok-1"], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].0, "stocks"); // ordered by key
+    assert_eq!(rows[1], ("weather".to_string(), 1, r#"{"city":"Oslo"}"#.to_string()));
+
+    conn.execute(&delete_device_widgets_sql(), ["tok-1"]).unwrap();
+    let remaining: i64 =
+        conn.query_row("SELECT COUNT(*) FROM device_widgets", [], |r| r.get(0)).unwrap();
+    assert_eq!(remaining, 0);
+}

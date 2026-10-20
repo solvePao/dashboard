@@ -6,13 +6,21 @@ pub mod routes;
 pub mod services;
 pub mod utils;
 
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 pub use objects::{DeviceObject, DevicesHubObject, PairingObject};
 
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 use utils::{
     allowed_origins, apply_cors, cors_preflight, is_websocket_upgrade, request_origin,
 };
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 use worker::*;
 
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let allowed = allowed_origins(&env);
@@ -60,6 +68,15 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         })
         .delete_async("/api/devices/:token", |req, ctx| async move {
             routes::device::revoke_device(req, ctx).await
+        })
+        .get_async("/api/devices/:token/widgets", |req, ctx| async move {
+            routes::device::get_device_widgets(req, ctx).await
+        })
+        .put_async("/api/devices/:token/widgets", |req, ctx| async move {
+            routes::device::save_device_widgets(req, ctx).await
+        })
+        .get_async("/api/device-widgets", |req, ctx| async move {
+            routes::device::get_own_widgets(req, ctx).await
         })
         .run(req, env)
         .await?;

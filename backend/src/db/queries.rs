@@ -85,6 +85,31 @@ pub fn get_user_devices_sql() -> String {
     )
 }
 
+/// Owner of one device token, or no row when unknown/expired.
+/// Guards every widget read/write so users only touch own devices.
+pub fn device_token_owner_sql() -> String {
+    format!("SELECT user_id FROM device_tokens WHERE token = ?1 AND expires_at > {SQL_NOW} LIMIT 1")
+}
+
+pub fn get_device_widgets_sql() -> String {
+    "SELECT widget_key, enabled, config_json, updated_at FROM device_widgets \
+     WHERE token = ?1 ORDER BY widget_key ASC"
+        .to_string()
+}
+
+pub fn delete_device_widgets_sql() -> String {
+    "DELETE FROM device_widgets WHERE token = ?1".to_string()
+}
+
+pub fn upsert_device_widget_sql() -> String {
+    format!(
+        "INSERT INTO device_widgets (token, widget_key, enabled, config_json, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, {SQL_NOW}) \
+         ON CONFLICT(token, widget_key) DO UPDATE SET enabled = excluded.enabled, \
+         config_json = excluded.config_json, updated_at = {SQL_NOW}"
+    )
+}
+
 /// Lowercase lookup key used by the pairing-code index lookup.
 pub fn normalize_session_lookup_key(code_or_session_id: &str) -> String {
     code_or_session_id.to_lowercase()

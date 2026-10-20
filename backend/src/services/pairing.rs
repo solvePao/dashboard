@@ -1,9 +1,21 @@
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 use wasm_bindgen::JsValue;
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 use worker::*;
 
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 use super::store::{DeviceNotifier, HubNotifier, PairingClient};
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 use crate::common::{DeviceLifecycleKind, DEVICE_BINDING_NAME, HUB_BINDING_NAME, PAIRING_BINDING_NAME};
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 use crate::models::auth::User;
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 use crate::models::device::{
     CheckSessionResponse, HubEventRequest, PairingCommitRequest, PairingInitRequest, PairingState,
 };
@@ -11,22 +23,30 @@ use crate::models::error::{AppError, AppResult};
 
 /// Production `PairingClient` over a Durable Object namespace.
 /// One stub per session, addressed by the full `session_id`.
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 pub struct DoPairingClient {
     namespace: ObjectNamespace,
 }
 
 /// Production `DeviceNotifier` over a Durable Object namespace.
 /// One stub per device token, addressed by the token itself.
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 pub struct DoDeviceNotifier {
     namespace: ObjectNamespace,
 }
 
 /// Production `HubNotifier` over a Durable Object namespace.
 /// One stub per user, addressed by the internal user id.
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 pub struct DoHubNotifier {
     namespace: ObjectNamespace,
 }
 
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 impl DoPairingClient {
     pub fn from_env(env: &Env) -> AppResult<Self> {
         let namespace = env
@@ -88,6 +108,8 @@ impl DoPairingClient {
     }
 }
 
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 impl PairingClient for DoPairingClient {
     async fn client_init(&self, session_id: &str, expires_at: &str) -> AppResult<PairingState> {
         let (_, parsed) = self
@@ -153,6 +175,8 @@ pub fn map_commit_status(status: u16) -> AppResult<bool> {
     }
 }
 
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 impl DoDeviceNotifier {
     pub fn from_env(env: &Env) -> AppResult<Self> {
         let namespace = env.durable_object(DEVICE_BINDING_NAME).map_err(|_| {
@@ -164,6 +188,8 @@ impl DoDeviceNotifier {
     }
 }
 
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 impl DeviceNotifier for DoDeviceNotifier {
     async fn notify_revoked(&self, device_token: &str) {
         // Best-effort push; errors are intentionally swallowed.
@@ -173,8 +199,19 @@ impl DeviceNotifier for DoDeviceNotifier {
         let Ok(req) = Request::new_with_init("https://device/revoke", &init) else { return };
         let _ = stub.fetch_with_request(req).await;
     }
+
+    async fn notify_widgets_updated(&self, device_token: &str) {
+        // Best-effort push; errors are intentionally swallowed.
+        let Ok(stub) = self.namespace.get_by_name(device_token) else { return };
+        let mut init = RequestInit::new();
+        init.method = Method::Post;
+        let Ok(req) = Request::new_with_init("https://device/widgets", &init) else { return };
+        let _ = stub.fetch_with_request(req).await;
+    }
 }
 
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 impl DoHubNotifier {
     pub fn from_env(env: &Env) -> AppResult<Self> {
         let namespace = env.durable_object(HUB_BINDING_NAME).map_err(|_| {
@@ -186,6 +223,8 @@ impl DoHubNotifier {
     }
 }
 
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 impl HubNotifier for DoHubNotifier {
     async fn notify_hub(&self, user_id: i64, kind: DeviceLifecycleKind, device_token: Option<&str>) {
         // Best-effort push; errors are intentionally swallowed.

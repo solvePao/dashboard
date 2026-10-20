@@ -42,11 +42,14 @@ frontend/
     ├── services/                  # Non-reactive business logic & third-party SDK drivers
     │   ├── sessionStorage.ts      # Auth localStorage driver & JWT expiry parsing
     │   ├── googleIdentity.ts      # GIS script loader & Google button renderer
-    │   └── qrScanner.ts           # html5-qrcode camera manager & QR payload extractor
+    │   ├── qrScanner.ts           # html5-qrcode camera manager & QR payload extractor
+    │   ├── geocodingApi.ts        # Open-Meteo city search client
+    │   └── stockApi.ts            # TradingView scanner client for stock search & verification
     │
     ├── composables/               # Reactive state controllers
     │   ├── useAuth.ts             # User session, login, and sign-out reactive state
     │   ├── useDevices.ts          # Connected mobile devices reactive state & actions
+    │   ├── useDeviceWidgets.ts    # Per-device widget configuration controller (Weather, Stocks)
     │   └── useTheme.ts            # Light/Dark/System theme switcher with storage sync
     │
     ├── components/                # Modular UI presentation components
@@ -56,6 +59,9 @@ frontend/
     │   ├── SignInPrompt.vue       # Unauthenticated callout banner
     │   ├── ConnectedDevicesList.vue# Container for paired mobile devices list
     │   ├── DeviceItemRow.vue      # Individual paired device row with revoke action
+    │   ├── DeviceManageView.vue   # Device widget management sheet with Weather and Stock configurations
+    │   ├── CityPickerModal.vue    # Search and select city modal for Weather widget
+    │   ├── StockPickerModal.vue   # Freeform ticker input & live verification modal for Stock widget
     │   ├── AddDeviceModal.vue     # Dialog for pairing new mobile devices
     │   ├── DeviceCodeForm.vue     # 6-character pairing code input form
     │   ├── DeviceCameraScanner.vue# Webcam QR scanner frame with status feedback

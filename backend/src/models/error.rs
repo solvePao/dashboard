@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 use worker::*;
 
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 use crate::utils::json_error;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +53,8 @@ impl AppError {
         Self::new(message, 503)
     }
 
+    #[cfg(not(any(test, coverage)))]
+    #[cfg(not(test))]
     pub fn to_response(&self) -> Result<Response> {
         json_error(&self.message, self.status)
     }

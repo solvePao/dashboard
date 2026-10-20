@@ -1,92 +1,44 @@
 import { computed, ref } from "vue";
 import { logger } from "../lib/logger";
 
-export type ThemePreference = "light" | "dark" | "system";
-export type ResolvedTheme = "light" | "dark";
+export type ResolvedTheme = "dark";
 
-const STORAGE_KEY = "dashboard.theme";
-const VALID: ReadonlySet<string> = new Set(["light", "dark", "system"]);
-
-const preference = ref<ThemePreference>("system");
-const systemDark = ref(false);
-
+// Always locked to pure black / dark theme
+const currentTheme = ref<ResolvedTheme>("dark");
 let initialized = false;
-let mediaQuery: MediaQueryList | null = null;
 
-function isValid(value: string | null): value is ThemePreference {
-  return value !== null && VALID.has(value);
-}
-
-function readStored(): ThemePreference {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return isValid(raw) ? raw : "system";
-  } catch {
-    logger.warn("theme", "theme storage unavailable; using system");
-    return "system";
-  }
-}
-
-function persist(value: ThemePreference): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, value);
-  } catch {
-    logger.warn("theme", "could not persist theme preference; session-only");
-  }
-}
-
-function apply(resolved: ResolvedTheme): void {
+function apply(): void {
+  if (typeof document === "undefined") return;
   const root = document.documentElement;
-  root.classList.toggle("dark", resolved === "dark");
-  root.style.colorScheme = resolved;
-  root.dataset.theme = resolved;
-  root.dataset.themePreference = preference.value;
-}
-
-function onSystemChange(event: MediaQueryListEvent): void {
-  systemDark.value = event.matches;
-  logger.debug("theme", "system theme changed", event.matches ? "dark" : "light");
-  if (preference.value === "system") {
-    apply(event.matches ? "dark" : "light");
-  }
-}
-
-function onStorage(event: StorageEvent): void {
-  if (event.key !== STORAGE_KEY) return;
-  const next = isValid(event.newValue) ? event.newValue : "system";
-  preference.value = next;
-  apply(resolveTheme(next, systemDark.value));
-  logger.debug("theme", "theme preference synced from another tab", next);
-}
-
-export function resolveTheme(pref: ThemePreference, prefersDark: boolean): ResolvedTheme {
-  if (pref === "system") return prefersDark ? "dark" : "light";
-  return pref;
+  root.classList.add("dark");
+  root.classList.remove("light");
+  root.style.colorScheme = "dark";
+  root.dataset.theme = "dark";
+  root.dataset.themeMode = "black";
 }
 
 function init(): void {
   if (initialized) return;
   initialized = true;
-  preference.value = readStored();
-  mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-  systemDark.value = mediaQuery.matches;
-  const resolved = resolveTheme(preference.value, systemDark.value);
-  apply(resolved);
-  logger.debug("theme", "initialized theme", { preference: preference.value, resolved });
-  mediaQuery.addEventListener("change", onSystemChange);
-  window.addEventListener("storage", onStorage);
+
+  // Clear any legacy stored light theme to prevent accidental white flashes
+  try {
+    localStorage.removeItem("dashboard.theme");
+    localStorage.removeItem("dashboard.weather_theme");
+  } catch {
+    // Storage quota or disabled
+  }
+
+  apply();
+  logger.debug("theme", "initialized pure black theme");
 }
 
-function setPreference(next: ThemePreference): void {
-  preference.value = next;
-  persist(next);
-  apply(resolveTheme(next, systemDark.value));
-  logger.debug("theme", "theme preference changed", next);
-}
-
-function toggle(): void {
-  const resolved = resolveTheme(preference.value, systemDark.value);
-  setPreference(resolved === "dark" ? "light" : "dark");
+/**
+ * Weather widget synchronization helper.
+ * Theme remains permanently black/dark; atmospheric FX inside the widget adapt to weather.
+ */
+export function syncWeatherTheme(_isDay?: boolean, _weatherCode?: number, _label?: string): void {
+  apply();
 }
 
 if (typeof window !== "undefined") {
@@ -94,17 +46,14 @@ if (typeof window !== "undefined") {
 }
 
 export function useTheme() {
-  const resolvedTheme = computed<ResolvedTheme>(() =>
-    resolveTheme(preference.value, systemDark.value),
-  );
-  const isDark = computed(() => resolvedTheme.value === "dark");
+  const resolvedTheme = computed<ResolvedTheme>(() => currentTheme.value);
+  const isDark = computed(() => true);
 
   return {
-    preference,
     resolvedTheme,
     isDark,
-    setPreference,
-    toggle,
+    weatherLabel: computed(() => "Black Theme"),
+    themeSource: computed(() => "permanent_black" as const),
+    syncWeatherTheme,
   };
 }
-

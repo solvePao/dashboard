@@ -88,5 +88,82 @@ pub async fn revoke_device_token(db: &D1Database, user_id: i64, token: &str) -> 
     // `success()` is true even when zero rows matched, so the row count
     // is the only honest signal for "revoked".
     let changed = res.meta()?.and_then(|m| m.changes).unwrap_or(0);
+    if changed > 0 {
+        // Widget rows are cleaned explicitly (no FK-cascade reliance).
+        let stmt = db.prepare(queries::delete_device_widgets_sql());
+        stmt.bind_refs(&[D1Type::Text(token)])?.run().await?;
+    }
     Ok(changed > 0)
+}
+
+/// Owner id of one device token, or `None` when unknown/expired.
+pub async fn get_device_token_owner(db: &D1Database, token: &str) -> Result<Option<i64>> {
+    // D1 binds user ids as integers; read back as i32 then widen.
+    let stmt = db.prepare(queries::device_token_owner_sql());
+    let row: Option<OwnerRow> = stmt
+        .bind_refs(&[D1Type::Text(token)])?
+        .first::<OwnerRow>(None)
+        .await?;
+    Ok(row.map(|r| r.user_id as i64))
+}
+
+#[derive(serde::Deserialize)]
+struct OwnerRow {
+    user_id: i32,
+}
+
+/// Widget rows for one device token, ordered by key.
+pub async fn get_device_widgets(
+    db: &D1Database,
+    token: &str,
+) -> Result<Vec<crate::models::device::DeviceWidget>> {
+    let stmt = db.prepare(queries::get_device_widgets_sql());
+    let result = stmt.bind_refs(&[D1Type::Text(token)])?.all().await?;
+    let rows: Vec<WidgetRow> = result.results::<WidgetRow>()?;
+    Ok(rows.into_iter().map(WidgetRow::into_widget).collect())
+}
+
+#[derive(serde::Deserialize)]
+struct WidgetRow {
+    widget_key: String,
+    enabled: i64,
+    config_json: String,
+    #[allow(dead_code)]
+    updated_at: String,
+}
+
+impl WidgetRow {
+    fn into_widget(self) -> crate::models::device::DeviceWidget {
+        crate::models::device::DeviceWidget {
+            widget_key: self.widget_key,
+            enabled: self.enabled != 0,
+            config: serde_json::from_str(&self.config_json).unwrap_or(serde_json::json!({})),
+        }
+    }
+}
+
+/// Replaces the full widget set for one device token: delete-then-insert
+/// so a PUT body is always the complete desired state (empty clears all).
+pub async fn replace_device_widgets(
+    db: &D1Database,
+    token: &str,
+    widgets: &[crate::models::device::DeviceWidget],
+) -> Result<()> {
+    let stmt = db.prepare(queries::delete_device_widgets_sql());
+    stmt.bind_refs(&[D1Type::Text(token)])?.run().await?;
+    for widget in widgets {
+        let stmt = db.prepare(queries::upsert_device_widget_sql());
+        let config = serde_json::to_string(&widget.config)
+            .map_err(|e| Error::RustError(format!("Failed to encode widget config: {e}")))?;
+        let enabled = if widget.enabled { 1 } else { 0 };
+        stmt.bind_refs(&[
+            D1Type::Text(token),
+            D1Type::Text(&widget.widget_key),
+            D1Type::Integer(enabled),
+            D1Type::Text(&config),
+        ])?
+        .run()
+        .await?;
+    }
+    Ok(())
 }

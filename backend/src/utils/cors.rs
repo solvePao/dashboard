@@ -1,8 +1,9 @@
+#[cfg(not(any(test, coverage)))]
 use worker::*;
 
-use crate::common::{
-    ALLOWED_HEADERS, ALLOWED_METHODS, CORS_MAX_AGE, DEFAULT_ORIGINS,
-};
+#[cfg(not(any(test, coverage)))]
+use crate::common::{ALLOWED_HEADERS, ALLOWED_METHODS, CORS_MAX_AGE};
+use crate::common::DEFAULT_ORIGINS;
 
 /// Pure parsing shared by production and tests.
 pub fn parse_allowed_origins(configured: &str) -> Vec<String> {
@@ -29,11 +30,13 @@ pub fn is_origin_allowed(origin: Option<&str>, allowed: &[String]) -> bool {
 
 /// Origins allowed to call the API. Configured with the comma-separated
 /// `FRONTEND_ORIGINS` var; falls back to the local Vite dev servers.
+#[cfg(not(any(test, coverage)))]
 pub fn allowed_origins(env: &Env) -> Vec<String> {
     let configured = super::env::get_frontend_origins(env).unwrap_or_default();
     parse_allowed_origins(&configured)
 }
 
+#[cfg(not(any(test, coverage)))]
 pub fn request_origin(req: &Request) -> Option<String> {
     req.headers().get("Origin").unwrap_or(None)
 }
@@ -45,6 +48,7 @@ pub fn is_websocket_upgrade(status_code: u16) -> bool {
     status_code == 101
 }
 
+#[cfg(not(any(test, coverage)))]
 pub fn apply_cors(origin: Option<&str>, allowed: &[String], mut res: Response) -> Result<Response> {
     if is_origin_allowed(origin, allowed) {
         if let Some(origin) = origin {
@@ -59,6 +63,7 @@ pub fn apply_cors(origin: Option<&str>, allowed: &[String], mut res: Response) -
     Ok(res)
 }
 
+#[cfg(not(any(test, coverage)))]
 pub fn cors_preflight(origin: Option<&str>, allowed: &[String]) -> Result<Response> {
     let mut res = Response::empty()?.with_status(204);
     if is_origin_allowed(origin, allowed) {

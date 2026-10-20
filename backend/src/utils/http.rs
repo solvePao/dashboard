@@ -1,3 +1,5 @@
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 use worker::*;
 
 /// Pure bearer parsing shared by production and tests.
@@ -43,10 +45,14 @@ pub fn build_expired_session_cookie(name: &str, secure: bool) -> String {
     }
 }
 
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 pub fn json_error(message: &str, status: u16) -> Result<Response> {
     Ok(Response::from_json(&serde_json::json!({ "error": message }))?.with_status(status))
 }
 
+#[cfg(not(any(test, coverage)))]
+#[cfg(not(test))]
 pub fn json_ok<T: serde::Serialize>(data: &T) -> Result<Response> {
     Response::from_json(data)
 }

@@ -161,6 +161,7 @@ struct FakePairingClient {
     fail_with: Mutex<Option<String>>,
     refuse_commit: Mutex<bool>,
     fail_commit: Mutex<bool>,
+    fail_init: Mutex<bool>,
 }
 
 impl FakePairingClient {
@@ -170,6 +171,7 @@ impl FakePairingClient {
             fail_with: Mutex::new(None),
             refuse_commit: Mutex::new(false),
             fail_commit: Mutex::new(false),
+            fail_init: Mutex::new(false),
         }
     }
     fn fail_next(&self, msg: &str) {
@@ -189,6 +191,9 @@ impl FakePairingClient {
 
 impl PairingClient for FakePairingClient {
     async fn client_init(&self, session_id: &str, expires_at: &str) -> AppResult<PairingState> {
+        if *self.fail_init.lock().unwrap() {
+            return Err(AppError::bad_gateway("init down"));
+        }
         if let Some(e) = self.take_fail() {
             return Err(e);
         }
@@ -257,6 +262,8 @@ impl DeviceNotifier for FakeNotifier {
     async fn notify_revoked(&self, device_token: &str) {
         self.calls.lock().unwrap().push(device_token.to_string());
     }
+
+    async fn notify_widgets_updated(&self, _device_token: &str) {}
 }
 
 struct FakeHubNotifier {
@@ -342,6 +349,15 @@ async fn create_session_client_failure_propagates() {
     .await
     .unwrap_err();
     assert_eq!(err.status, 502);
+
+    // Failure on client_init after status check succeeds
+    *client.fail_init.lock().unwrap() = true;
+    let err = DeviceService::create_session_with(&store, &client, &valid_session_id(), |_| {
+        Ok("<svg/>".to_string())
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(err.status, 502);
 }
 
 #[tokio::test]
@@ -367,6 +383,29 @@ async fn create_session_never_reopens_authorized() {
     let status = DeviceService::check_session_with(&client, &sid).await.unwrap();
     assert_eq!(status.status, "authorized");
     assert_eq!(status.token.as_deref(), Some("tok-first"));
+}
+
+#[tokio::test]
+async fn create_session_resets_non_authorized_session() {
+    let (store, client) = harness();
+    let sid = valid_session_id();
+    client.seed(
+        &sid,
+        PairingState {
+            status: "expired".to_string(),
+            expires_at: "e".to_string(),
+            token: None,
+            user: None,
+        },
+    );
+    let res = DeviceService::create_session_with(&store, &client, &sid, |_| {
+        Ok("<svg/>".to_string())
+    })
+    .await
+    .unwrap();
+    assert_eq!(res.session_id, sid);
+    let status = DeviceService::check_session_with(&client, &sid).await.unwrap();
+    assert_eq!(status.status, "pending");
 }
 
 #[tokio::test]
@@ -490,6 +529,15 @@ async fn authorize_rejects_empty_missing_and_expired() {
     .await
     .unwrap_err();
     assert_eq!(err.status, 404);
+
+    let unknown_sid = "ff".repeat(16);
+    let err = DeviceService::authorize_device_with(&store, &client, &user, &unknown_sid, None, || {
+        Ok("t".to_string())
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(err.status, 404);
+    assert_eq!(err.message, "Pending session not found or expired.");
 
     let sid = valid_session_id();
     DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
@@ -689,6 +737,29 @@ async fn get_and_revoke_devices() {
     store.fail_next("db");
     assert_eq!(
         DeviceService::get_user_devices_with(&store, 1).await.unwrap_err().status,
+        502
+    );
+
+    store.fail_next("db");
+    assert_eq!(
+        DeviceService::revoke_device_with(&store, &notifier, 1, "t1").await.unwrap_err().status,
+        502
+    );
+
+    let hub_notifier = FakeHubNotifier::new();
+    store.fail_next("db");
+    assert_eq!(
+        DeviceService::revoke_device_and_notify_with(
+            &store,
+            &notifier,
+            &hub_notifier,
+            1,
+            "t1",
+            DeviceLifecycleKind::Revoked
+        )
+        .await
+        .unwrap_err()
+        .status,
         502
     );
 }

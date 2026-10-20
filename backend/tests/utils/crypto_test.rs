@@ -1,4 +1,4 @@
-use backend::utils::{generate_secure_token, is_valid_session_id_hex};
+use backend::utils::{generate_secure_token, generate_secure_token_using, is_valid_session_id_hex};
 
 #[test]
 fn valid_session_id_hex_accepts_lower_upper_and_digits() {
@@ -45,4 +45,22 @@ fn generate_secure_token_unique() {
     let a = generate_secure_token().unwrap();
     let b = generate_secure_token().unwrap();
     assert_ne!(a, b);
+}
+
+fn failing_entropy(_: &mut [u8]) -> Result<(), getrandom::Error> {
+    Err(getrandom::Error::UNEXPECTED)
+}
+
+fn fixed_entropy(buf: &mut [u8]) -> Result<(), getrandom::Error> {
+    buf.fill(0xab);
+    Ok(())
+}
+
+#[test]
+fn generate_secure_token_using_error_and_custom() {
+    let err = generate_secure_token_using(failing_entropy).unwrap_err();
+    assert!(err.starts_with("Failed to generate random bytes:"));
+
+    let custom = generate_secure_token_using(fixed_entropy).unwrap();
+    assert_eq!(custom, "ab".repeat(32));
 }

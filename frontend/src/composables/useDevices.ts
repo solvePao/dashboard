@@ -20,6 +20,29 @@ interface HubEvent {
   revision: number;
 }
 
+/// Observer hook for hub events (e.g. `widgets_updated`): Manage sheets
+/// subscribe to refresh one device without owning the socket.
+export type HubListener = (event: HubEvent) => void;
+
+const hubListeners = new Set<HubListener>();
+
+export function subscribeHubEvents(listener: HubListener): () => void {
+  hubListeners.add(listener);
+  return () => {
+    hubListeners.delete(listener);
+  };
+}
+
+function notifyHubListeners(event: HubEvent): void {
+  for (const listener of hubListeners) {
+    try {
+      listener(event);
+    } catch (err) {
+      logger.warn("devices", "hub listener failed", err);
+    }
+  }
+}
+
 interface HubSnapshot {
   kind: "snapshot";
   revision: number;
@@ -46,6 +69,8 @@ export function useDevices() {
       // A new row needs its full details; re-fetch the list once.
       void fetchDevices(lastFetchToken).catch(() => undefined);
     }
+    // `widgets_updated` needs no list change, but subscribed sheets do.
+    notifyHubListeners(event);
   }
 
   function handleHubSnapshot(snapshot: HubSnapshot): void {
@@ -201,6 +226,7 @@ export function useDevices() {
     revokeDevice,
     clearDevices,
     closeHub,
+    subscribeHubEvents,
   };
 }
 

@@ -49,3 +49,68 @@ pub fn normalize_device_name(name: Option<&str>) -> String {
         .unwrap_or(DEFAULT_DEVICE_NAME)
         .to_string()
 }
+
+/// Longest accepted widget key. Keys are client-registry names
+/// (`weather`, later `stocks`, `gallery`, ...).
+pub const MAX_WIDGET_KEY_LEN: usize = 32;
+
+/// Upper bound on widgets stored per device; keeps a PUT body small.
+pub const MAX_WIDGETS_PER_DEVICE: usize = 16;
+
+/// Validates one widget key: `1..=32` chars of lowercase letters,
+/// digits, or underscores. The backend is intentionally key-agnostic —
+/// the widget registry lives on the frontends — so unknown-but-shaped
+/// keys are accepted and simply render nothing until a client knows them.
+pub fn normalize_widget_key(raw: Option<&str>) -> AppResult<String> {
+    let trimmed = raw.map(str::trim).unwrap_or("");
+    if trimmed.is_empty() {
+        return Err(AppError::bad_request("Missing 'widget_key'."));
+    }
+    let shaped = !trimmed.is_empty()
+        && trimmed.len() <= MAX_WIDGET_KEY_LEN
+        && trimmed
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    if !shaped {
+        return Err(AppError::bad_request(
+            "Invalid 'widget_key'. Use 1-32 lowercase letters, digits, or underscores.",
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Validates one widget config: must be a JSON object when present,
+/// defaulting to `{}` so callers can omit it.
+pub fn normalize_widget_config(raw: Option<&serde_json::Value>) -> AppResult<serde_json::Value> {
+    match raw {
+        None => Ok(serde_json::json!({})),
+        Some(v) if v.is_object() => Ok(v.clone()),
+        Some(_) => Err(AppError::bad_request("Invalid 'config'. Must be a JSON object.")),
+    }
+}
+
+/// Validates a full PUT widgets body into normalized widgets. Missing
+/// body or duplicate keys are 400s; an empty list is valid and clears
+/// every widget (the web "None" choice).
+pub fn normalize_widgets(
+    items: Option<&[crate::models::device::WidgetSaveItem]>,
+) -> AppResult<Vec<crate::models::device::DeviceWidget>> {
+    let items = items
+        .ok_or_else(|| AppError::bad_request("Missing 'widgets'. Expected a list of widgets."))?;
+    if items.len() > MAX_WIDGETS_PER_DEVICE {
+        return Err(AppError::bad_request("Too many widgets."));
+    }
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let widget = crate::models::device::DeviceWidget {
+            widget_key: normalize_widget_key(item.widget_key.as_deref())?,
+            enabled: item.enabled.unwrap_or(true),
+            config: normalize_widget_config(item.config.as_ref())?,
+        };
+        if out.iter().any(|w: &crate::models::device::DeviceWidget| w.widget_key == widget.widget_key) {
+            return Err(AppError::bad_request("Duplicate 'widget_key'."));
+        }
+        out.push(widget);
+    }
+    Ok(out)
+}

@@ -1,14 +1,13 @@
 <script setup lang="ts">
-import { Loader2, ShieldCheck, Trash2 } from "@lucide/vue";
+import { Settings2, ShieldCheck } from "@lucide/vue";
 import type { DeviceItem } from "../types/device";
 
 defineProps<{
   device: DeviceItem;
-  isRevoking: boolean;
 }>();
 
 const emit = defineEmits<{
-  (e: "revoke", token: string): void;
+  (e: "manage", device: DeviceItem): void;
 }>();
 
 function formatDate(iso: string): string {
@@ -23,23 +22,23 @@ function formatDate(iso: string): string {
 </script>
 
 <template>
-  <div class="flex items-center justify-between py-3.5">
-    <div class="flex items-center gap-3">
+  <div class="fe-devicerow-root flex items-center justify-between py-3.5">
+    <div class="fe-devicerow-info flex items-center gap-3">
       <span
-        class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+        class="fe-devicerow-badge flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
       >
-        <ShieldCheck class="h-4 w-4" />
+        <ShieldCheck class="fe-devicerow-badge-icon h-4 w-4" />
       </span>
-      <div>
-        <div class="flex items-center gap-2">
-          <span class="text-sm font-medium text-foreground">{{ device.device_name }}</span>
+      <div class="fe-devicerow-details">
+        <div class="fe-devicerow-name-row flex items-center gap-2">
+          <span class="fe-devicerow-name text-sm font-medium text-foreground">{{ device.device_name }}</span>
           <span
-            class="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
+            class="fe-devicerow-status rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
           >
             Authorized
           </span>
         </div>
-        <p class="text-xs text-muted-foreground mt-0.5">
+        <p class="fe-devicerow-meta text-xs text-muted-foreground mt-0.5">
           Paired on {{ formatDate(device.created_at) }} · Valid until {{ formatDate(device.expires_at) }}
         </p>
       </div>
@@ -47,14 +46,11 @@ function formatDate(iso: string): string {
 
     <button
       type="button"
-      class="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs text-destructive transition hover:bg-destructive/10"
-      :disabled="isRevoking"
-      @click="emit('revoke', device.token)"
+      class="fe-devicerow-manage-btn inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-foreground transition hover:bg-accent"
+      @click="emit('manage', device)"
     >
-      <Loader2 v-if="isRevoking" class="h-3.5 w-3.5 animate-spin" />
-      <Trash2 v-else class="h-3.5 w-3.5" />
-      <span>Revoke</span>
+      <Settings2 class="fe-devicerow-manage-icon h-3.5 w-3.5 text-primary" />
+      <span class="fe-devicerow-manage-label">Manage</span>
     </button>
   </div>
 </template>
-

@@ -5,7 +5,7 @@ pub const DEFAULT_ORIGINS: &[&str] = &[
     "http://127.0.0.1:5174",
 ];
 
-pub const ALLOWED_METHODS: &str = "GET, POST, DELETE, OPTIONS";
+pub const ALLOWED_METHODS: &str = "GET, POST, PUT, DELETE, OPTIONS";
 pub const ALLOWED_HEADERS: &str = "Content-Type, Authorization";
 pub const CORS_MAX_AGE: &str = "86400";
 
@@ -33,8 +33,8 @@ pub const SHORT_CODE_LEN: usize = 6;
 pub const DEFAULT_DEVICE_NAME: &str = "Mobile Device";
 
 pub const JWT_SECRET_NAME: &str = "JWT_SECRET";
-/// Web session JWT lifetime: 60 minutes, in seconds and millis.
-pub const JWT_EXPIRY_SECS: u64 = 3600;
+/// Web session JWT lifetime: 30 days, in seconds and millis.
+pub const JWT_EXPIRY_SECS: u64 = 30 * 24 * 3600;
 pub const JWT_EXPIRY_MILLIS: u64 = JWT_EXPIRY_SECS * 1000;
 
 /// Minimum accepted JWT secret length. Rejects empty/missing secrets (fail
@@ -60,6 +60,7 @@ pub enum DeviceLifecycleKind {
     Authorized,
     Revoked,
     Disconnected,
+    WidgetsUpdated,
 }
 
 impl DeviceLifecycleKind {
@@ -68,6 +69,7 @@ impl DeviceLifecycleKind {
             Self::Authorized => "authorized",
             Self::Revoked => "revoked",
             Self::Disconnected => "disconnected",
+            Self::WidgetsUpdated => "widgets_updated",
         }
     }
 }

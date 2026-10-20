@@ -12,5 +12,12 @@ export default defineConfig({
   },
   server: {
     port: 5174,
+    proxy: {
+      '/api/tv-scanner': {
+        target: 'https://scanner.tradingview.com',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api\/tv-scanner/, ''),
+      },
+    },
   },
 })

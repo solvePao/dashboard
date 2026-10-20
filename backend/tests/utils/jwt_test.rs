@@ -97,3 +97,62 @@ fn jwt_rejects_future_iat() {
     let slight = mint_jwt("sub-1", 7, SECRET, NOW + 30).unwrap();
     assert!(verify_jwt(&slight, SECRET, NOW).is_ok());
 }
+
+#[test]
+fn validate_jwt_secret_cases() {
+    use backend::utils::validate_jwt_secret;
+
+    let err = validate_jwt_secret(None).unwrap_err();
+    assert_eq!(err.status, 503);
+    assert_eq!(err.message, "Server auth is not configured.");
+
+    let err = validate_jwt_secret(Some("")).unwrap_err();
+    assert_eq!(err.status, 503);
+
+    let err = validate_jwt_secret(Some("   ")).unwrap_err();
+    assert_eq!(err.status, 503);
+
+    let err = validate_jwt_secret(Some("short-secret")).unwrap_err();
+    assert_eq!(err.status, 503);
+
+    let valid = validate_jwt_secret(Some(SECRET)).unwrap();
+    assert_eq!(valid, SECRET);
+
+    let padded = format!("  {SECRET}  ");
+    let valid = validate_jwt_secret(Some(&padded)).unwrap();
+    assert_eq!(valid, SECRET);
+}
+
+#[test]
+fn jwt_rejects_invalid_base64_and_json() {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+
+    let token = mint_jwt("sub-1", 7, SECRET, NOW).unwrap();
+    let parts: Vec<&str> = token.split('.').collect();
+
+    // Invalid base64 in signature
+    let bad_sig = format!("{}.{}.!!!", parts[0], parts[1]);
+    assert!(verify_jwt(&bad_sig, SECRET, NOW).is_err());
+
+    // Invalid base64 in payload
+    let bad_payload = format!("{}.!!!.{}", parts[0], parts[2]);
+    assert!(verify_jwt(&bad_payload, SECRET, NOW).is_err());
+
+    // Valid base64 payload but not JSON, signed properly with SECRET
+    let not_json = URL_SAFE_NO_PAD.encode(b"not valid json");
+    let input = format!("{}.{}", parts[0], not_json);
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(SECRET.as_bytes()).unwrap();
+    use hmac::Mac;
+    mac.update(input.as_bytes());
+    let signed_bad_json = format!("{input}.{}", URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()));
+    let err = verify_jwt(&signed_bad_json, SECRET, NOW).unwrap_err();
+    assert_eq!(err, "Invalid session token.");
+
+    // Invalid base64 in payload, signed properly with SECRET
+    let input = format!("{}.!!!", parts[0]);
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(SECRET.as_bytes()).unwrap();
+    mac.update(input.as_bytes());
+    let signed_bad_b64 = format!("{input}.{}", URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()));
+    let err = verify_jwt(&signed_bad_b64, SECRET, NOW).unwrap_err();
+    assert_eq!(err, "Invalid session token.");
+}

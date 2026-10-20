@@ -2,7 +2,7 @@ use worker::*;
 
 use crate::models::device::{
     AuthorizeDeviceRequest, CheckSessionRequest, CreateSessionRequest, DevicesResponse,
-    RevokeResponse,
+    RevokeResponse, SaveWidgetsRequest, WidgetsResponse,
 };
 use crate::services::{AuthService, DeviceService};
 use crate::utils::{
@@ -285,6 +285,96 @@ pub async fn revoke_device(req: Request, ctx: RouteContext<()>) -> Result<Respon
 
     match DeviceService::revoke_device(&db, &ctx.env, user.id, &token_to_revoke, kind).await {
         Ok(revoked) => json_ok(&RevokeResponse { revoked }),
+        Err(err) => err.to_response(),
+    }
+}
+
+/// Reads one device's widget set for the web dashboard. The caller must
+/// own the token; other users' tokens report 404.
+pub async fn get_device_widgets(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let token = match validation::require_route_token(ctx.param("token").map(String::as_str)) {
+        Ok(t) => t,
+        Err(err) => return err.to_response(),
+    };
+
+    let header = req.headers().get("Authorization").unwrap_or(None);
+    let auth_token = match validation::require_bearer_header(header.as_deref()) {
+        Ok(t) => t,
+        Err(err) => return err.to_response(),
+    };
+
+    let db = match get_db(&ctx) {
+        Ok(db) => db,
+        Err(err) => return err.to_response(),
+    };
+
+    let user = match AuthService::authenticate(&auth_token, &ctx.env, &db).await {
+        Ok(u) => u,
+        Err(err) => return err.to_response(),
+    };
+
+    match DeviceService::get_device_widgets(&db, user.id, &token).await {
+        Ok(widgets) => json_ok(&WidgetsResponse { widgets }),
+        Err(err) => err.to_response(),
+    }
+}
+
+/// Replaces one device's widget set from the web dashboard. An empty
+/// list is valid and clears every widget (the "None" choice).
+pub async fn save_device_widgets(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let token = match validation::require_route_token(ctx.param("token").map(String::as_str)) {
+        Ok(t) => t,
+        Err(err) => return err.to_response(),
+    };
+
+    let header = req.headers().get("Authorization").unwrap_or(None);
+    let auth_token = match validation::require_bearer_header(header.as_deref()) {
+        Ok(t) => t,
+        Err(err) => return err.to_response(),
+    };
+
+    let db = match get_db(&ctx) {
+        Ok(db) => db,
+        Err(err) => return err.to_response(),
+    };
+
+    let user = match AuthService::authenticate(&auth_token, &ctx.env, &db).await {
+        Ok(u) => u,
+        Err(err) => return err.to_response(),
+    };
+
+    let body: SaveWidgetsRequest = match req.json().await {
+        Ok(b) => b,
+        Err(_) => return json_error("Invalid JSON body.", 400),
+    };
+
+    let widgets = match crate::services::validation::normalize_widgets(body.widgets.as_deref()) {
+        Ok(w) => w,
+        Err(err) => return err.to_response(),
+    };
+
+    match DeviceService::save_device_widgets(&db, &ctx.env, user.id, &token, widgets).await {
+        Ok(widgets) => json_ok(&WidgetsResponse { widgets }),
+        Err(err) => err.to_response(),
+    }
+}
+
+/// Reads the caller's own widget set using the device token as the
+/// Bearer [REDACTED] (mobile clients). Unknown/expired tokens are 401.
+pub async fn get_own_widgets(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let header = req.headers().get("Authorization").unwrap_or(None);
+    let token = match validation::require_bearer_header(header.as_deref()) {
+        Ok(t) => t,
+        Err(err) => return err.to_response(),
+    };
+
+    let db = match get_db(&ctx) {
+        Ok(db) => db,
+        Err(err) => return err.to_response(),
+    };
+
+    match DeviceService::get_own_widgets(&db, &token).await {
+        Ok(widgets) => json_ok(&WidgetsResponse { widgets }),
         Err(err) => err.to_response(),
     }
 }

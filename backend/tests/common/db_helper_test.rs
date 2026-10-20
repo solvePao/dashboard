@@ -14,7 +14,7 @@ fn common_constants_match_contract() {
     assert_eq!(SHORT_CODE_LEN, 6);
     assert_eq!(DB_BINDING_NAME, "dashboard");
     assert_eq!(DEFAULT_DEVICE_NAME, "Mobile Device");
-    assert_eq!(ALLOWED_METHODS, "GET, POST, DELETE, OPTIONS");
+    assert_eq!(ALLOWED_METHODS, "GET, POST, PUT, DELETE, OPTIONS");
     assert_eq!(ALLOWED_HEADERS, "Content-Type, Authorization");
     assert_eq!(CORS_MAX_AGE, "86400");
     assert!(!SQL_NOW.is_empty());
@@ -38,10 +38,12 @@ fn device_lifecycle_kind_contract() {
     assert_eq!(DeviceLifecycleKind::Authorized.as_str(), "authorized");
     assert_eq!(DeviceLifecycleKind::Revoked.as_str(), "revoked");
     assert_eq!(DeviceLifecycleKind::Disconnected.as_str(), "disconnected");
+    assert_eq!(DeviceLifecycleKind::WidgetsUpdated.as_str(), "widgets_updated");
 
     assert_eq!(format!("{}", DeviceLifecycleKind::Authorized), "authorized");
     assert_eq!(format!("{}", DeviceLifecycleKind::Revoked), "revoked");
     assert_eq!(format!("{}", DeviceLifecycleKind::Disconnected), "disconnected");
+    assert_eq!(format!("{}", DeviceLifecycleKind::WidgetsUpdated), "widgets_updated");
 
     // Serde roundtrip (snake_case)
     let auth_json = serde_json::to_string(&DeviceLifecycleKind::Authorized).unwrap();
@@ -50,6 +52,12 @@ fn device_lifecycle_kind_contract() {
     assert_eq!(rev_json, "\"revoked\"");
     let disc_json = serde_json::to_string(&DeviceLifecycleKind::Disconnected).unwrap();
     assert_eq!(disc_json, "\"disconnected\"");
+    let widgets_json = serde_json::to_string(&DeviceLifecycleKind::WidgetsUpdated).unwrap();
+    assert_eq!(widgets_json, "\"widgets_updated\"");
+    assert_eq!(
+        serde_json::from_str::<DeviceLifecycleKind>("\"widgets_updated\"").unwrap(),
+        DeviceLifecycleKind::WidgetsUpdated
+    );
 
     assert_eq!(
         serde_json::from_str::<DeviceLifecycleKind>("\"authorized\"").unwrap(),

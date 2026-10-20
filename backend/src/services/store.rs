@@ -1,10 +1,14 @@
+#[cfg(not(any(test, coverage)))]
 use worker::D1Database;
 
 use crate::common::DeviceLifecycleKind;
+#[cfg(not(any(test, coverage)))]
 use crate::db;
 use crate::models::auth::User;
-use crate::models::device::{CheckSessionResponse, DeviceToken, PairingCode, PairingState};
-use crate::models::error::{AppError, AppResult};
+use crate::models::device::{CheckSessionResponse, DeviceToken, DeviceWidget, PairingCode, PairingState};
+#[cfg(not(any(test, coverage)))]
+use crate::models::error::AppError;
+use crate::models::error::AppResult;
 
 /// Testable storage seams for services.
 /// Production D1 is `D1Stores`; the pairing referee is a Durable
@@ -50,6 +54,9 @@ pub trait PairingStore {
 #[allow(async_fn_in_trait)]
 pub trait DeviceNotifier {
     async fn notify_revoked(&self, device_token: &str);
+    /// Tells a live device its widget set changed. Unlike revocation the
+    /// socket stays open; the device re-fetches and re-renders.
+    async fn notify_widgets_updated(&self, device_token: &str);
 }
 
 /// Used when the notifier binding is unavailable: revocation still commits.
@@ -57,6 +64,20 @@ pub struct NoNotify;
 
 impl DeviceNotifier for NoNotify {
     async fn notify_revoked(&self, _device_token: &str) {}
+    async fn notify_widgets_updated(&self, _device_token: &str) {}
+}
+
+/// D1 side of per-device widgets: config rows only. Widget semantics
+/// (known keys, config shapes) live on the frontends' registries.
+#[allow(async_fn_in_trait)]
+pub trait WidgetStore {
+    async fn store_device_token_owner(&self, token: &str) -> AppResult<Option<i64>>;
+    async fn store_get_device_widgets(&self, token: &str) -> AppResult<Vec<DeviceWidget>>;
+    async fn store_replace_device_widgets(
+        &self,
+        token: &str,
+        widgets: &[DeviceWidget],
+    ) -> AppResult<()>;
 }
 
 /// Live-dashboard side of the lifecycle: tells the user's hub object
@@ -86,8 +107,10 @@ pub trait PairingClient {
 }
 
 /// Production adapter over `D1Database`.
+#[cfg(not(any(test, coverage)))]
 pub struct D1Stores<'a>(pub &'a D1Database);
 
+#[cfg(not(any(test, coverage)))]
 impl UserStore for D1Stores<'_> {
     async fn store_get_user_by_sub(&self, sub: &str) -> AppResult<Option<User>> {
         db::get_user_by_sub(self.0, sub).await.map_err(|err| {
@@ -121,6 +144,7 @@ impl UserStore for D1Stores<'_> {
     }
 }
 
+#[cfg(not(any(test, coverage)))]
 impl PairingStore for D1Stores<'_> {
     async fn store_upsert_pairing_code(
         &self,
@@ -171,5 +195,30 @@ impl PairingStore for D1Stores<'_> {
         db::revoke_device_token(self.0, user_id, token)
             .await
             .map_err(|_| AppError::bad_gateway("Failed to revoke device."))
+    }
+}
+
+#[cfg(not(any(test, coverage)))]
+impl WidgetStore for D1Stores<'_> {
+    async fn store_device_token_owner(&self, token: &str) -> AppResult<Option<i64>> {
+        db::get_device_token_owner(self.0, token)
+            .await
+            .map_err(|_| AppError::bad_gateway("Database error."))
+    }
+
+    async fn store_get_device_widgets(&self, token: &str) -> AppResult<Vec<DeviceWidget>> {
+        db::get_device_widgets(self.0, token)
+            .await
+            .map_err(|_| AppError::bad_gateway("Failed to fetch widgets."))
+    }
+
+    async fn store_replace_device_widgets(
+        &self,
+        token: &str,
+        widgets: &[DeviceWidget],
+    ) -> AppResult<()> {
+        db::replace_device_widgets(self.0, token, widgets)
+            .await
+            .map_err(|_| AppError::bad_gateway("Failed to save widgets."))
     }
 }

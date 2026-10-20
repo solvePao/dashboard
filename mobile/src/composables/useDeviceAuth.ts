@@ -44,6 +44,30 @@ export function deriveShortCode(id: string): string {
   return id ? id.slice(0, 6).toUpperCase() : "";
 }
 
+/// Observer hook for live device-socket pushes the auth flow itself
+/// does not consume (e.g. `widgets_updated`). Widget sync subscribes
+/// here instead of opening a second socket.
+export type DeviceSocketListener = (event: { status?: string; message?: string }) => void;
+
+const deviceSocketListeners = new Set<DeviceSocketListener>();
+
+export function subscribeDeviceSocket(listener: DeviceSocketListener): () => void {
+  deviceSocketListeners.add(listener);
+  return () => {
+    deviceSocketListeners.delete(listener);
+  };
+}
+
+function notifyDeviceSocketListeners(event: { status?: string; message?: string }): void {
+  for (const listener of deviceSocketListeners) {
+    try {
+      listener(event);
+    } catch (err) {
+      logger.warn("auth", "device socket listener failed", err);
+    }
+  }
+}
+
 /**
  * True only when the error proves the saved token was rejected (vs. the
  * backend being unreachable). Network failures must NOT clear the token.
@@ -102,6 +126,9 @@ export function useDeviceAuth() {
           await createSession();
           statusMessage.value =
             "Device access was revoked from the web dashboard. Scan QR code to reconnect.";
+        } else if (body.status === "widgets_updated") {
+          // The socket stays open; widget sync re-fetches and re-renders.
+          notifyDeviceSocketListeners(body);
         }
       } catch {
         logger.warn("auth", "Ignored malformed device socket message");
@@ -359,6 +386,7 @@ export function useDeviceAuth() {
     isConfirmingDisconnect,
     disconnectError,
     isAuthenticated,
+    subscribeDeviceSocket,
     init,
     createSession,
     checkAuth,

@@ -21,6 +21,13 @@ export default defineConfig({
     headers: {
       'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
     },
+    proxy: {
+      '/api/tv-scanner': {
+        target: 'https://scanner.tradingview.com',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api\/tv-scanner/, ''),
+      },
+    },
   },
   resolve: {
     alias: {

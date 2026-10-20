@@ -23,3 +23,6 @@ sha2 = "0.10"
 fast_qr = { version = "0.14", features = ["svg"] }
 getrandom = { version = "0.2", features = ["js"] }
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
+

@@ -41,21 +41,34 @@ mobile/
     │
     ├── services/                  # Non-reactive business logic & utilities
     │   ├── crypto.ts              # 32-hex secure random session ID generator (crypto.getRandomValues)
-    │   └── deviceStorage.ts       # LocalStorage driver for mobile device token persistence
+    │   ├── deviceStorage.ts       # LocalStorage driver for mobile device token persistence
+    │   ├── weatherApi.ts          # Open-Meteo forecast & air quality client
+    │   └── stockApi.ts            # TradingView scanner client with 5m cache & backoff
     │
     ├── composables/               # Reactive state controllers
     │   ├── useDeviceAuth.ts       # Pairing lifecycle, token restore, and reactive status
     │   ├── useOrientationLock.ts  # Screen orientation lock and fullscreen management
+    │   ├── useWidgets.ts          # Reactive store for device widgets synced via socket
     │   └── useTheme.ts            # Light/Dark/System theme switcher with storage sync
     │
     ├── components/                # Modular UI presentation components
     │   ├── HorizontalSplitLayout.vue # Dual-panel responsive container with configurable split ratio
-    │   ├── DeviceInstructionsCard.vue# Left panel coordinating pairing instructions & link summary
+    │   ├── VerticalSlidePager.vue # Smooth vertical slide pager with touch, wheel & morphing dots
+    │   ├── DeviceLeftPanel.vue    # Left panel coordinating Weather widget & DeviceLinkedSummary
     │   ├── DevicePairingSteps.vue # Step 1-4 pairing guide with feedback message banner
     │   ├── DeviceLinkedSummary.vue# Active connection summary and 6-month validity badge
-    │   ├── DeviceAuthCard.vue     # Right panel coordinating pairing view & authorized profile
+    │   ├── DeviceAuthCard.vue     # Right panel coordinating Stock widget, Clock view & pairing
     │   ├── DevicePairingView.vue  # SVG QR code display, 6-char code badge, and copy button
+    │   ├── DeviceAuthorizedMinimalView.vue # Multi-mode Clock & synchronization view (Digital, Analog, Calendar)
     │   ├── DeviceAuthorizedView.vue# Authorized profile avatar, name, email, and connection badges
+    │   ├── clock/
+    │   │   ├── DigitalClockView.vue  # 12h/24h digital clock with animated colons and date badges
+    │   │   ├── AnalogClockView.vue   # SVG analog dial with smooth 60fps sweep / mechanical tick and date window
+    │   │   └── MonthCalendarView.vue # Interactive monthly calendar grid with month/year navigation and Today reset
+    │   ├── widgets/
+    │   │   ├── WeatherWidget.vue  # Full weather display with multi-city horizontal swipe animation, live condition mapping, and interactive FX preview
+    │   │   ├── WeatherEffects.vue # GPU-accelerated atmospheric visual shaders (sunlight, day/night rain, cloud, sandstorm, snow, chilly night)
+    │   │   └── StockWidget.vue    # Full stock display with live quotes, multi-period performance dropdown (1D to 1Y from API), day range, metrics grid
     │   └── ThemeToggle.vue        # Dropdown / button toggling light, dark, or system mode
     │
     ├── styles/                    # Decoupled stylesheets
@@ -155,7 +168,7 @@ flowchart TD
 4. **`src/composables/` (Reactive Controllers)**
    - **`useDeviceAuth.ts`**: Manages the full pairing lifecycle. Displays the backend's canonical `short_code` (with a local `deriveShortCode` fallback), tracks `authState`, restores saved tokens via `restoreExistingToken` (clears storage only on 401/403; keeps the token and offers retry on network errors), initializes sessions via `createSession`, re-verifies saved tokens first inside `checkAuth`, and cleans up tokens via `disconnect`.
    - **`useOrientationLock.ts`**: Monitors screen orientation and document fullscreen state. Requests `screen.orientation.lock("landscape")` when supported and provides `toggleFullscreen`.
-   - **`useTheme.ts`**: Controls theme switching and syncs with OS preference.
+   - **`useTheme.ts`**: Weather-driven adaptive theme controller (`syncWeatherTheme`). Automatically sets Light mode during daytime weather and Dark mode during nighttime or dark severe storms (thunderstorms, duststorms), with a local solar time fallback (6 AM - 6 PM) and zero manual UI toggles.
 
 5. **`src/components/` (UI Presentation Layer)**
    - **`HorizontalSplitLayout.vue`**: Configurable dual-pane layout maintaining responsive width ratios and safe-area padding.

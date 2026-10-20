@@ -8,49 +8,49 @@ defineProps<{
 </script>
 
 <template>
-  <div class="flex flex-col gap-2.5">
-    <p class="text-xs font-medium text-muted-foreground">
+  <div class="mo-steps-root flex flex-col gap-2.5">
+    <p class="mo-steps-intro text-xs font-medium text-muted-foreground">
       Follow these steps to connect this device:
     </p>
 
-    <ol class="space-y-2 text-xs">
-      <li class="flex items-start gap-2">
+    <ol class="mo-steps-list space-y-2 text-xs">
+      <li class="mo-steps-item-1 flex items-start gap-2">
         <span
-          class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 font-mono text-[11px] font-semibold text-primary"
+          class="mo-steps-num-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 font-mono text-[11px] font-semibold text-primary"
         >
           1
         </span>
-        <span class="text-foreground/90">
+        <span class="mo-steps-text-1 text-foreground/90">
           Open the web dashboard on your computer and sign in with Google.
         </span>
       </li>
-      <li class="flex items-start gap-2">
+      <li class="mo-steps-item-2 flex items-start gap-2">
         <span
-          class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 font-mono text-[11px] font-semibold text-primary"
+          class="mo-steps-num-2 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 font-mono text-[11px] font-semibold text-primary"
         >
           2
         </span>
-        <span class="text-foreground/90">
-          Click <strong class="font-semibold text-foreground">Add Device</strong> in the top navigation bar.
+        <span class="mo-steps-text-2 text-foreground/90">
+          Click <strong class="mo-steps-text-2-strong font-semibold text-foreground">Add Device</strong> in the top navigation bar.
         </span>
       </li>
-      <li class="flex items-start gap-2">
+      <li class="mo-steps-item-3 flex items-start gap-2">
         <span
-          class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 font-mono text-[11px] font-semibold text-primary"
+          class="mo-steps-num-3 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 font-mono text-[11px] font-semibold text-primary"
         >
           3
         </span>
-        <span class="text-foreground/90">
+        <span class="mo-steps-text-3 text-foreground/90">
           Scan the QR code or enter the 6-character code from the right panel.
         </span>
       </li>
-      <li class="flex items-start gap-2">
+      <li class="mo-steps-item-4 flex items-start gap-2">
         <span
-          class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 font-mono text-[11px] font-semibold text-primary"
+          class="mo-steps-num-4 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 font-mono text-[11px] font-semibold text-primary"
         >
           4
         </span>
-        <span class="text-foreground/90">
+        <span class="mo-steps-text-4 text-foreground/90">
           Keep this page open — it signs in on its own once authorized. The round button below re-checks manually.
         </span>
       </li>
@@ -60,6 +60,7 @@ defineProps<{
     <div
       v-if="statusMessage"
       :class="[
+        'mo-steps-feedback',
         'rounded-lg p-2.5 text-xs transition-all',
         authState === 'authorized'
           ? 'border border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'

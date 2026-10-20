@@ -251,10 +251,15 @@ async fn authenticate_rejects_forged_and_stale_tokens() {
     let store = FakeUsers::with_user(user(5, "sub-5"));
     let stale = backend::utils::mint_jwt("sub-5", 5, JWT_SECRET, NOW_SECS).unwrap();
     assert_eq!(
-        AuthService::authenticate_with(&store, &stale, JWT_SECRET, NOW_SECS + 7200)
-            .await
-            .unwrap_err()
-            .status,
+        AuthService::authenticate_with(
+            &store,
+            &stale,
+            JWT_SECRET,
+            NOW_SECS + backend::common::JWT_EXPIRY_SECS + 1
+        )
+        .await
+        .unwrap_err()
+        .status,
         401
     );
 
@@ -322,6 +327,24 @@ async fn login_with_google_upserts_and_mints_verifiable_jwt() {
             .status,
         401
     );
+
+    // DB failure during upsert propagates as 502
+    *store.fail.lock().unwrap() = true;
+    let verifier = FakeVerifier { profile: Some(profile("sub-err")) };
+    assert_eq!(
+        AuthService::login_with_google_with(&store, &verifier, "tok", JWT_SECRET, NOW_SECS)
+            .await
+            .unwrap_err()
+            .status,
+        502
+    );
+    *store.fail.lock().unwrap() = false;
+
+    // Empty secret fails mint_jwt and maps to 500
+    let err = AuthService::login_with_google_with(&store, &verifier, "tok", "", NOW_SECS)
+        .await
+        .unwrap_err();
+    assert_eq!(err.status, 500);
 }
 
 #[tokio::test]

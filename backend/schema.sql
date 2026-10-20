@@ -39,3 +39,19 @@ CREATE TABLE IF NOT EXISTS device_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens (user_id);
 
+-- Per-device widget configuration (weather, and future widgets like
+-- stocks or gallery). One row per (device token, widget key); the
+-- config is an opaque JSON object interpreted by the frontends, so new
+-- widget types need no schema change. Cleanup is explicit in
+-- `revoke_device_token` — no reliance on FK cascades.
+CREATE TABLE IF NOT EXISTS device_widgets (
+  token TEXT NOT NULL,
+  widget_key TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  config_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  PRIMARY KEY (token, widget_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_device_widgets_token ON device_widgets (token);
+

@@ -129,10 +129,8 @@ function initSession(): void {
   }
 }
 
-// Cross-tab sign-out sync: the server JWT lives in localStorage (short
-// 60-minute expiry mitigates XSS persistence, but any XSS can still read it
-// during its lifetime — httpOnly cookies would require a backend session
-// refactor, out of scope here). When one tab signs out or its session is
+// Cross-tab sign-out sync: the server JWT lives in localStorage (30-day
+// expiry session). When one tab signs out or its session is
 // cleared/expired, other tabs sign out too instead of acting on a stale JWT.
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (event: StorageEvent) => {

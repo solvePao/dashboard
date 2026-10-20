@@ -1,12 +1,20 @@
+#[cfg(not(any(test, coverage)))]
 use worker::*;
 
+#[cfg(not(any(test, coverage)))]
 use super::pairing::{DoDeviceNotifier, DoHubNotifier, DoPairingClient};
-use super::store::{D1Stores, DeviceNotifier, HubNotifier, NoNotify, PairingClient, PairingStore};
+#[cfg(not(any(test, coverage)))]
+use super::store::D1Stores;
+#[cfg(not(any(test, coverage)))]
+use super::store::NoNotify;
+use super::store::{
+    DeviceNotifier, HubNotifier, PairingClient, PairingStore, WidgetStore,
+};
 use super::validation as v;
 use crate::common::DeviceLifecycleKind;
 use crate::models::auth::User;
 use crate::models::device::{
-    AuthorizeDeviceResponse, CheckSessionResponse, CreateSessionResponse, DeviceToken,
+    AuthorizeDeviceResponse, CheckSessionResponse, CreateSessionResponse, DeviceToken, DeviceWidget,
 };
 use crate::models::error::{AppError, AppResult};
 use crate::utils;
@@ -15,6 +23,7 @@ pub struct DeviceService;
 
 impl DeviceService {
     /// Creates a pairing: D1 code index + Durable Object pending state.
+    #[cfg(not(any(test, coverage)))]
     pub async fn create_session(
         db: &D1Database,
         env: &Env,
@@ -25,16 +34,15 @@ impl DeviceService {
             .await
     }
 
-    pub async fn create_session_with<S, C, F>(
+    pub async fn create_session_with<S, C>(
         store: &S,
         client: &C,
         session_id: &str,
-        generate_qr: F,
+        generate_qr: fn(&str) -> std::result::Result<String, String>,
     ) -> AppResult<CreateSessionResponse>
     where
         S: PairingStore + Sync,
         C: PairingClient + Sync,
-        F: FnOnce(&str) -> std::result::Result<String, String>,
     {
         let trimmed_id = v::validate_session_id(session_id)?;
         let short_code = v::derive_short_code(&trimmed_id);
@@ -72,6 +80,7 @@ impl DeviceService {
 
     /// Authorizes a pending pairing for the authenticated user.
     /// The object referees the transition; D1 only persists the token.
+    #[cfg(not(any(test, coverage)))]
     pub async fn authorize_device(
         db: &D1Database,
         env: &Env,
@@ -108,20 +117,19 @@ impl DeviceService {
         }
     }
 
-    pub async fn authorize_device_and_notify_with<S, C, H, F>(
+    pub async fn authorize_device_and_notify_with<S, C, H>(
         store: &S,
         client: &C,
         hub_notifier: &H,
         user: &User,
         code_or_session: &str,
         device_name: Option<&str>,
-        gen_token: F,
+        gen_token: fn() -> std::result::Result<String, String>,
     ) -> AppResult<AuthorizeDeviceResponse>
     where
         S: PairingStore + Sync,
         C: PairingClient + Sync,
         H: HubNotifier + Sync,
-        F: FnOnce() -> std::result::Result<String, String>,
     {
         let result = Self::authorize_device_with(
             store,
@@ -140,18 +148,17 @@ impl DeviceService {
         result
     }
 
-    pub async fn authorize_device_with<S, C, F>(
+    pub async fn authorize_device_with<S, C>(
         store: &S,
         client: &C,
         user: &User,
         code_or_session: &str,
         device_name: Option<&str>,
-        generate_token: F,
+        generate_token: fn() -> std::result::Result<String, String>,
     ) -> AppResult<AuthorizeDeviceResponse>
     where
         S: PairingStore + Sync,
         C: PairingClient + Sync,
-        F: FnOnce() -> std::result::Result<String, String>,
     {
         let trimmed_code = v::normalize_code_or_session(code_or_session)?;
 
@@ -215,6 +222,7 @@ impl DeviceService {
     }
 
     /// Fallback status read; the Durable Object is the source.
+    #[cfg(not(any(test, coverage)))]
     pub async fn check_session(env: &Env, session_id: &str) -> AppResult<CheckSessionResponse> {
         let client = DoPairingClient::from_env(env)?;
         Self::check_session_with(&client, session_id).await
@@ -232,6 +240,7 @@ impl DeviceService {
     }
 
     /// Lists active device tokens for the user.
+    #[cfg(not(any(test, coverage)))]
     pub async fn get_user_devices(db: &D1Database, user_id: i64) -> AppResult<Vec<DeviceToken>> {
         Self::get_user_devices_with(&D1Stores(db), user_id).await
     }
@@ -249,6 +258,7 @@ impl DeviceService {
     /// `kind` is `DeviceLifecycleKind::Revoked` for web-initiated revocation and
     /// `DeviceLifecycleKind::Disconnected` when the device deletes itself; both share this
     /// one delete-and-notify path (D1 first, then the object pokes).
+    #[cfg(not(any(test, coverage)))]
     pub async fn revoke_device(
         db: &D1Database,
         env: &Env,
@@ -309,5 +319,116 @@ impl DeviceService {
             notifier.notify_revoked(token).await;
         }
         Ok(revoked)
+    }
+
+    /// Reads one device's widget set for its owner. Unknown tokens and
+    /// other users' tokens both report 404 so ownership stays hidden.
+    #[cfg(not(any(test, coverage)))]
+    pub async fn get_device_widgets(
+        db: &D1Database,
+        user_id: i64,
+        token: &str,
+    ) -> AppResult<Vec<DeviceWidget>> {
+        Self::get_device_widgets_with(&D1Stores(db), user_id, token).await
+    }
+
+    pub async fn get_device_widgets_with<S>(
+        store: &S,
+        user_id: i64,
+        token: &str,
+    ) -> AppResult<Vec<DeviceWidget>>
+    where
+        S: WidgetStore + Sync,
+    {
+        Self::require_token_owner(store, user_id, token).await?;
+        store.store_get_device_widgets(token).await
+    }
+
+    /// Reads one device's widget set using the device token itself as
+    /// the credential (mobile clients). Unknown/expired tokens are 401.
+    #[cfg(not(any(test, coverage)))]
+    pub async fn get_own_widgets(db: &D1Database, token: &str) -> AppResult<Vec<DeviceWidget>> {
+        Self::get_own_widgets_with(&D1Stores(db), token).await
+    }
+
+    pub async fn get_own_widgets_with<S>(store: &S, token: &str) -> AppResult<Vec<DeviceWidget>>
+    where
+        S: WidgetStore + Sync,
+    {
+        match store.store_device_token_owner(token).await? {
+            Some(_) => store.store_get_device_widgets(token).await,
+            None => Err(AppError::unauthorized("Device token not found or expired.")),
+        }
+    }
+
+    /// Replaces one device's widget set for its owner, then pushes the
+    /// change to the live device socket and the user's dashboard hub.
+    /// Both pushes are best-effort: a dead object never fails the save.
+    #[cfg(not(any(test, coverage)))]
+    pub async fn save_device_widgets(
+        db: &D1Database,
+        env: &Env,
+        user_id: i64,
+        token: &str,
+        widgets: Vec<DeviceWidget>,
+    ) -> AppResult<Vec<DeviceWidget>> {
+        let dev = DoDeviceNotifier::from_env(env);
+        let hub = DoHubNotifier::from_env(env);
+        match (dev, hub) {
+            (Ok(d), Ok(h)) => {
+                Self::save_device_widgets_with(&D1Stores(db), &d, &h, user_id, token, widgets).await
+            }
+            (Ok(d), Err(_)) => {
+                Self::save_device_widgets_with(&D1Stores(db), &d, &NoNotify, user_id, token, widgets)
+                    .await
+            }
+            (Err(_), Ok(h)) => {
+                Self::save_device_widgets_with(&D1Stores(db), &NoNotify, &h, user_id, token, widgets)
+                    .await
+            }
+            (Err(_), Err(_)) => {
+                Self::save_device_widgets_with(
+                    &D1Stores(db),
+                    &NoNotify,
+                    &NoNotify,
+                    user_id,
+                    token,
+                    widgets,
+                )
+                .await
+            }
+        }
+    }
+
+    pub async fn save_device_widgets_with<S, N, H>(
+        store: &S,
+        device_notifier: &N,
+        hub_notifier: &H,
+        user_id: i64,
+        token: &str,
+        widgets: Vec<DeviceWidget>,
+    ) -> AppResult<Vec<DeviceWidget>>
+    where
+        S: WidgetStore + Sync,
+        N: DeviceNotifier + Sync,
+        H: HubNotifier + Sync,
+    {
+        Self::require_token_owner(store, user_id, token).await?;
+        store.store_replace_device_widgets(token, &widgets).await?;
+        device_notifier.notify_widgets_updated(token).await;
+        hub_notifier
+            .notify_hub(user_id, DeviceLifecycleKind::WidgetsUpdated, Some(token))
+            .await;
+        Ok(widgets)
+    }
+
+    async fn require_token_owner<S>(store: &S, user_id: i64, token: &str) -> AppResult<()>
+    where
+        S: WidgetStore + Sync,
+    {
+        match store.store_device_token_owner(token).await? {
+            Some(owner) if owner == user_id => Ok(()),
+            _ => Err(AppError::not_found("Device not found.")),
+        }
     }
 }

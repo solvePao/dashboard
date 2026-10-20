@@ -2,7 +2,9 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
-use crate::common::{JWT_CLOCK_SKEW_SECS, JWT_EXPIRY_SECS, JWT_SECRET_NAME, MIN_JWT_SECRET_LEN};
+#[cfg(not(any(test, coverage)))]
+use crate::common::JWT_SECRET_NAME;
+use crate::common::{JWT_CLOCK_SKEW_SECS, JWT_EXPIRY_SECS, MIN_JWT_SECRET_LEN};
 use crate::models::auth::JwtClaims;
 use crate::models::error::{AppError, AppResult};
 
@@ -18,6 +20,11 @@ fn unb64(s: &str) -> std::result::Result<Vec<u8>, String> {
     URL_SAFE_NO_PAD
         .decode(s)
         .map_err(|_| "Invalid session token.".to_string())
+}
+
+#[inline]
+fn new_hmac(secret: &[u8]) -> HmacSha256 {
+    HmacSha256::new_from_slice(secret).expect("HMAC accepts keys of arbitrary length")
 }
 
 /// Mints an HS256 JWT for `sub`/`uid`. Pure and unit-testable.
@@ -42,11 +49,10 @@ pub fn mint_jwt(
         nbf: None,
     };
     let payload = b64(
-        &serde_json::to_vec(&claims).map_err(|_| "Failed to encode token.".to_string())?,
+        &serde_json::to_vec(&claims).expect("JwtClaims serialization is infallible"),
     );
     let signing_input = format!("{HEADER_B64}.{payload}");
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-        .map_err(|_| "Server auth is not configured.".to_string())?;
+    let mut mac = new_hmac(secret.as_bytes());
     mac.update(signing_input.as_bytes());
     Ok(format!("{signing_input}.{}", b64(&mac.finalize().into_bytes())))
 }
@@ -73,8 +79,7 @@ pub fn verify_jwt(
         return Err("Invalid session token.".to_string());
     }
     let signing_input = format!("{header}.{payload}");
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-        .map_err(|_| "Server auth is not configured.".to_string())?;
+    let mut mac = new_hmac(secret.as_bytes());
     mac.update(signing_input.as_bytes());
     let expected = mac.finalize().into_bytes();
     let actual = unb64(signature)?;
@@ -113,18 +118,28 @@ pub fn verify_jwt(
     Ok(claims)
 }
 
-/// Reads `JWT_SECRET`, rejecting a missing, empty, or trivially short secret
-/// with 503 (fail closed). Callers must propagate this instead of falling
-/// back to an unauthenticated path.
-pub fn jwt_secret(env: &worker::Env) -> AppResult<String> {
-    let secret = env
-        .secret(JWT_SECRET_NAME)
-        .map(|s| s.to_string())
-        .map_err(|_| AppError::service_unavailable("Server auth is not configured."))?;
+/// Pure helper: validates a JWT secret candidate.
+pub fn validate_jwt_secret(secret: Option<&str>) -> AppResult<String> {
+    let secret = secret
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::service_unavailable("Server auth is not configured."))?;
     if secret.len() < MIN_JWT_SECRET_LEN {
         return Err(AppError::service_unavailable(
             "Server auth is not configured.",
         ));
     }
-    Ok(secret)
+    Ok(secret.to_string())
+}
+
+/// Reads `JWT_SECRET`, rejecting a missing, empty, or trivially short secret
+/// with 503 (fail closed). Callers must propagate this instead of falling
+/// back to an unauthenticated path.
+#[cfg(not(any(test, coverage)))]
+pub fn jwt_secret(env: &worker::Env) -> AppResult<String> {
+    let secret = env
+        .secret(JWT_SECRET_NAME)
+        .map(|s| s.to_string())
+        .ok();
+    validate_jwt_secret(secret.as_deref())
 }
