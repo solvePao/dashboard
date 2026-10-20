@@ -3,7 +3,7 @@ GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 # Secret for the server-minted web session JWT (HS256). Required: sign-in
 # mints tokens with it and every authenticated route verifies against it.
 # Generate one with: openssl rand -hex 32
-# Production: wrangler secret put JWT_SECRET
+# Production: wrangler secret put JWT_SECRET --env production
 JWT_SECRET=change-me-to-a-long-random-secret
 
 # Comma-separated origins allowed to call the API. Defaults to the local

@@ -42,7 +42,7 @@ Production Wrangler commands upload the prebuilt API. Always build it before a m
 
    Use the same production client ID in the frontend and API. Generate the JWT secret using a cryptographically secure generator with at least 32 random bytes. Preserve it across releases. Do not commit secrets or reuse the development JWT secret.
 3. Create a dedicated Cloudflare CI token restricted to the production account with Workers Scripts Edit, Workers Routes Edit, D1 Edit, Account Settings Read, and Zone Read for `solvepao.com`. Worker custom domains manage the requested DNS records; normal releases do not need general DNS Edit access.
-4. Create the GitHub `production` environment. Set its `CLOUDFLARE_API_TOKEN` secret and `CLOUDFLARE_ACCOUNT_ID` variable. Set the non-secret `GOOGLE_CLIENT_ID` repository variable as well, because the build job reads it before entering the production environment. Do not store the OAuth client secret or JWT secret in the workflow.
+4. Create the GitHub `production` environment and restrict deployment branches to `main`. Set its `CLOUDFLARE_API_TOKEN` secret and `CLOUDFLARE_ACCOUNT_ID` variable. Set the non-secret `GOOGLE_CLIENT_ID` repository variable as well, because the build job reads it before entering the production environment. Do not store the OAuth client secret or JWT secret in the workflow.
 5. Before the first migration, export D1 into a private local backup:
 
    ```sh

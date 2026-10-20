@@ -54,4 +54,3 @@ CREATE TABLE IF NOT EXISTS device_widgets (
 );
 
 CREATE INDEX IF NOT EXISTS idx_device_widgets_token ON device_widgets (token);
-
