@@ -669,19 +669,44 @@ onBeforeUnmount(() => {
           >
             <div class="mo-tile-heading flex min-w-0 items-center justify-between gap-1">
               <span class="mo-tile-symbol font-bold text-amber-400" :title="item.symbol">{{ item.symbol }}</span>
-              <span class="mo-tile-secondary truncate text-[10px] text-zinc-400">{{ getQuoteFor(item.symbol)?.name || item.name }}</span>
             </div>
+            <p class="mo-tile-name truncate text-[10px] text-zinc-400" :title="getQuoteFor(item.symbol)?.name || item.name">
+              {{ getQuoteFor(item.symbol)?.name || item.name }}
+            </p>
             <div class="mo-tile-price font-black text-white">
               {{ formatQuotePrice(getQuoteFor(item.symbol)?.price) }}
-              <span class="mo-tile-secondary text-[10px] text-amber-400">{{ getQuoteFor(item.symbol)?.currency }}</span>
+              <span class="mo-tile-currency text-[9px] font-semibold text-amber-400">{{ getQuoteFor(item.symbol)?.currency }}</span>
             </div>
-            <div class="mo-tile-change inline-flex w-fit max-w-full items-center gap-1 rounded-xs px-1.5 py-0.5 font-bold" :class="getTileBadgeClass(item.symbol)">
-              <component
-                v-if="getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod) !== null"
-                :is="isTilePositive(item.symbol) ? ArrowUp : ArrowDown"
-                class="h-3 w-3 shrink-0"
-              />
-              <span>{{ getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod) === null ? '--' : `${isTilePositive(item.symbol) ? '+' : ''}${getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod)!.toFixed(2)}%` }}</span>
+            <div class="mo-tile-performance flex flex-wrap items-center justify-between gap-1">
+              <div class="mo-tile-change inline-flex w-fit max-w-full items-center gap-1 rounded-xs px-1.5 py-0.5 font-bold" :class="getTileBadgeClass(item.symbol)">
+                <component
+                  v-if="getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod) !== null"
+                  :is="isTilePositive(item.symbol) ? ArrowUp : ArrowDown"
+                  class="h-3 w-3 shrink-0"
+                />
+                <span>{{ getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod) === null ? '--' : `${isTilePositive(item.symbol) ? '+' : ''}${getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod)!.toFixed(2)}%` }}</span>
+              </div>
+              <span
+                class="mo-tile-net text-[10px] font-semibold"
+                :class="getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod) === null ? 'text-zinc-400' : isTilePositive(item.symbol) ? 'text-emerald-400' : 'text-rose-400'"
+                :title="`${selectedPeriod} net change`"
+              >
+                {{ formatQuoteChange(getQuoteNetChange(getQuoteFor(item.symbol), selectedPeriod) ?? undefined) }}
+              </span>
+            </div>
+            <dl class="mo-tile-range grid grid-cols-2 gap-1 border-t border-zinc-800/70 pt-1 text-[9px] leading-tight">
+              <div class="min-w-0">
+                <dt class="text-zinc-500">DAY LOW</dt>
+                <dd class="text-zinc-300">{{ formatQuotePrice(getQuoteFor(item.symbol)?.dayLow) }}</dd>
+              </div>
+              <div class="min-w-0 text-right">
+                <dt class="text-zinc-500">DAY HIGH</dt>
+                <dd class="text-zinc-300">{{ formatQuotePrice(getQuoteFor(item.symbol)?.dayHigh) }}</dd>
+              </div>
+            </dl>
+            <div class="mo-tile-volume flex items-center justify-between gap-1 text-[9px] text-zinc-400">
+              <span>VOLUME</span>
+              <span>{{ getQuoteFor(item.symbol) ? formatCompactNumber(getQuoteFor(item.symbol)!.volume) : '--' }}</span>
             </div>
           </div>
         </TransitionGroup>
@@ -724,11 +749,19 @@ onBeforeUnmount(() => {
 }
 .mo-tile-symbol {
   font-size: clamp(0.625rem, 3cqw, 0.875rem);
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .mo-tile-price {
   font-size: clamp(0.75rem, 4.5cqw, 1.5rem);
   line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+.mo-tile-name, .mo-tile-volume {
+  display: none;
+}
+.mo-tile-range dd, .mo-tile-net {
   overflow-wrap: anywhere;
 }
 .mo-tile-change {
@@ -768,7 +801,6 @@ onBeforeUnmount(() => {
   max-width: 100%;
 }
 @container stock (max-width: 440px) {
-  .mo-tile-secondary { display: none; }
   .mo-stock-header { font-size: 0.625rem; }
   .mo-stock-header .tracking-wider { letter-spacing: normal; }
 }
@@ -780,7 +812,19 @@ onBeforeUnmount(() => {
 @container stock (max-height: 320px) {
   .mo-stock-view { gap: 0.25rem; }
   .mo-stock-tile { padding: 0.25rem; gap: 0.125rem; }
-  .mo-tile-secondary { display: none; }
+}
+
+@container stock (min-height: 340px) {
+  .mo-tile-name { display: block; }
+}
+@container stock (min-height: 360px) {
+  .mo-tile-volume { display: flex; }
+}
+@container stock (max-height: 280px) {
+  .mo-tile-range { display: none; }
+}
+@container stock (max-height: 240px) {
+  .mo-tile-net { display: none; }
 }
 
 /* 1. View Morph: Terminal Detail <-> Matrix Grid */
