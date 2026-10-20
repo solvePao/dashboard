@@ -1,0 +1,10 @@
+name = "dashboard-homehub"
+account_id = "eb7edc81b33d5f40d1f026bfd37f3a49"
+compatibility_date = "2026-09-29"
+workers_dev = false
+preview_urls = false
+routes = [{ pattern = "homehub.solvepao.com", custom_domain = true }]
+
+[assets]
+directory = "./dist"
+not_found_handling = "single-page-application"

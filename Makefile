@@ -49,7 +49,9 @@ start-api: ## Run backend worker locally (local SQLite D1, never remote)
 	cd backend && npx wrangler dev --local
 
 deploy-api: ## Deploy backend worker to production (remote D1)
-	cd backend && npx wrangler deploy --env production
+	pnpm build:api
+	pnpm db:migrate:production
+	pnpm deploy:api
 
 test-api: ## Run backend Rust tests in parallel (host, mocked D1/Google)
 	cd backend && cargo test --tests -- --test-threads=8
@@ -61,7 +63,7 @@ db-schema-local: ## Apply backend/schema.sql to the local D1 (SQLite) database
 	cd backend && npx wrangler d1 execute dashboard --local --file=./schema.sql
 
 db-schema-prod: ## Apply backend/schema.sql to the PRODUCTION D1 database (remote)
-	cd backend && npx wrangler d1 execute dashboard --remote --file=./schema.sql
+	pnpm db:migrate:production
 
 start-web: install-frontend ## Run frontend server
 	cd frontend && pnpm dev

@@ -3,6 +3,8 @@
 This project contains a Rust backend (Cloudflare Workers) with D1 storage,
 plus Vue frontends.
 
+See [DEPLOYMENT.md](DEPLOYMENT.md) for production domains, GitHub Actions, account setup, validation, and recovery.
+
 ## Running the Backend
 The backend is a Rust Worker. To run it locally:
 ```bash

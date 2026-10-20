@@ -1,0 +1,6 @@
+# Deployment tooling only; the applications keep their own workspaces and locks.
+packages:
+  - '.'
+allowBuilds:
+  esbuild: true
+  workerd: true

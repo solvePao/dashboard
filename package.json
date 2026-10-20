@@ -1,0 +1,20 @@
+{
+  "name": "dashboard-deployment",
+  "private": true,
+  "packageManager": "pnpm@12.14.0",
+  "engines": { "node": "24.x" },
+  "scripts": {
+    "build:frontend": "pnpm --dir frontend build",
+    "build:mobile": "pnpm --dir mobile build",
+    "build:api": "cd backend && worker-build --release --locked",
+    "validate:api": "wrangler deploy --config backend/wrangler.toml --env production --dry-run",
+    "validate:frontend": "wrangler deploy --config frontend/wrangler.toml --dry-run",
+    "validate:mobile": "wrangler deploy --config mobile/wrangler.toml --dry-run",
+    "db:migrate:production": "wrangler d1 migrations apply dashboard --config backend/wrangler.toml --env production --remote",
+    "deploy:api": "wrangler deploy --config backend/wrangler.toml --env production",
+    "deploy:frontend": "wrangler deploy --config frontend/wrangler.toml",
+    "deploy:mobile": "wrangler deploy --config mobile/wrangler.toml",
+    "verify:production": "node scripts/verify-deployment.mjs"
+  },
+  "devDependencies": { "wrangler": "4.151.1" }
+}

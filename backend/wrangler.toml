@@ -3,7 +3,7 @@ main = "build/index.js"
 compatibility_date = "2026-09-29"
 
 [build]
-command = "cargo install -q \"worker-build@^0.8\" && worker-build --release"
+command = "worker-build --release --locked"
 
 # Plain-text vars (non-secret). ENVIRONMENT tells the running Worker which
 # backend it is: "dev" locally, "production" after deploy.
@@ -39,10 +39,35 @@ new_sqlite_classes = ["DeviceObject"]
 tag = "v3"
 new_sqlite_classes = ["DevicesHubObject"]
 
-# Production: deploy with `wrangler deploy --env production`. Inherits the D1
-# binding above, resolved against the remote Cloudflare D1 instance.
+# Production bindings must be declared explicitly: environments do not inherit them.
 [env.production]
 name = "backend-production"
+account_id = "eb7edc81b33d5f40d1f026bfd37f3a49"
+workers_dev = false
+preview_urls = false
+routes = [{ pattern = "dashboard-api.solvepao.com", custom_domain = true }]
+
+# CI builds and validates this bundle before the deployment job uploads it.
+[env.production.build]
+command = ""
+
+[env.production.observability]
+enabled = true
+head_sampling_rate = 1
+
+[[env.production.d1_databases]]
+binding = "dashboard"
+database_name = "dashboard"
+database_id = "9f4dde3a-c017-4f06-89ac-15a6b9ea1b9b"
+migrations_dir = "migrations"
+
+[env.production.durable_objects]
+bindings = [
+  { name = "PAIRING_OBJECT", class_name = "PairingObject" },
+  { name = "DEVICE_OBJECT", class_name = "DeviceObject" },
+  { name = "DEVICES_HUB", class_name = "DevicesHubObject" },
+]
 
 [env.production.vars]
 ENVIRONMENT = "production"
+FRONTEND_ORIGINS = "https://homehub.solvepao.com,https://nest.solvepao.com"
