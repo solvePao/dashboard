@@ -54,9 +54,10 @@ mobile/
     ├── components/                # Modular UI presentation components
     │   ├── HorizontalSplitLayout.vue # Dual-panel responsive container with configurable split ratio
     │   ├── VerticalSlidePager.vue # Smooth vertical slide pager with touch, wheel & morphing dots
-    │   ├── DeviceLeftPanel.vue    # Left panel coordinating Weather widget & DeviceLinkedSummary
+    │   ├── DeviceLeftPanel.vue    # Left panel coordinating Weather widget & Clock view
     │   ├── DevicePairingSteps.vue # Step 1-4 pairing guide with feedback message banner
-    │   ├── DeviceLinkedSummary.vue# Active connection summary and 6-month validity badge
+    │   ├── DeviceLinkedSummary.vue# Active connection summary and 6-month validity badge (housed in settings modal)
+    │   ├── DeviceSettingsModal.vue# Floating settings modal (fullscreen, theme, linked device summary, disconnect, user profile)
     │   ├── DeviceAuthCard.vue     # Right panel coordinating Stock widget, Clock view & pairing
     │   ├── DevicePairingView.vue  # SVG QR code display, 6-char code badge, and copy button
     │   ├── DeviceAuthorizedMinimalView.vue # Multi-mode Clock & synchronization view (Digital, Analog, Calendar)

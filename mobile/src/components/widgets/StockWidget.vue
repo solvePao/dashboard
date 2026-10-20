@@ -141,8 +141,40 @@ const currentSymbol = computed<StockSymbolItem>(() => {
   return symbolsList.value[0];
 });
 
+function getItemLookupKey(item: StockSymbolItem): string {
+  if (item.ticker && item.ticker.trim()) return item.ticker.trim().toUpperCase();
+  if (item.exchange && !item.symbol.includes(":")) {
+    return `${item.exchange.trim()}:${item.symbol.trim()}`.toUpperCase();
+  }
+  return item.symbol.trim().toUpperCase();
+}
+
+function getDisplaySymbol(item: StockSymbolItem): string {
+  if (item.symbol.includes(":")) {
+    return item.symbol.split(":")[1];
+  }
+  return item.symbol;
+}
+
+function getDisplayExchange(item: StockSymbolItem): string | null {
+  if (item.exchange) return item.exchange;
+  if (item.ticker && item.ticker.includes(":")) return item.ticker.split(":")[0];
+  if (item.symbol.includes(":")) return item.symbol.split(":")[0];
+  const q = getQuoteFor(item);
+  if (q?.exchange) return q.exchange;
+  return null;
+}
+
+function getQuoteFor(itemOrSym: StockSymbolItem | string): StockQuoteData | null {
+  if (typeof itemOrSym === "string") {
+    return quotes.value[itemOrSym.toUpperCase()] || null;
+  }
+  const lookupKey = getItemLookupKey(itemOrSym);
+  return quotes.value[lookupKey] || quotes.value[itemOrSym.symbol.toUpperCase()] || null;
+}
+
 const currentQuote = computed<StockQuoteData | null>(() => {
-  return quotes.value[currentSymbol.value.symbol.toUpperCase()] || null;
+  return getQuoteFor(currentSymbol.value);
 });
 
 const currentChangePercent = computed<number | null>(() => {
@@ -176,26 +208,22 @@ const gridClass = computed(() =>
   symbolsList.value.length <= 2 ? "grid-cols-2 grid-rows-1" : "grid-cols-2 grid-rows-2"
 );
 
-function getQuoteFor(sym: string): StockQuoteData | null {
-  return quotes.value[sym.toUpperCase()] || null;
-}
-
-function isTilePositive(sym: string): boolean {
-  const q = getQuoteFor(sym);
+function isTilePositive(itemOrSym: StockSymbolItem | string): boolean {
+  const q = getQuoteFor(itemOrSym);
   const p = getQuoteChangePercent(q, selectedPeriod.value);
   return p !== null && p >= 0;
 }
 
-function getTileBorderClass(sym: string): string {
-  const q = getQuoteFor(sym);
+function getTileBorderClass(itemOrSym: StockSymbolItem | string): string {
+  const q = getQuoteFor(itemOrSym);
   if (!q) return "";
   const p = getQuoteChangePercent(q, selectedPeriod.value);
   if (p === null) return "border-l-2 border-l-zinc-700";
   return p >= 0 ? "border-l-2 border-l-emerald-500" : "border-l-2 border-l-rose-500";
 }
 
-function getTileBadgeClass(sym: string): string {
-  const q = getQuoteFor(sym);
+function getTileBadgeClass(itemOrSym: StockSymbolItem | string): string {
+  const q = getQuoteFor(itemOrSym);
   if (!q) return "bg-zinc-800 text-zinc-400";
   const p = getQuoteChangePercent(q, selectedPeriod.value);
   if (p === null) return "bg-zinc-800 text-zinc-400";
@@ -223,18 +251,21 @@ function nextInspectedSymbol(): void {
 }
 
 async function load(force = false): Promise<void> {
-  const symbols = symbolsList.value.map((s) => s.symbol);
-  if (symbols.length === 0) return;
+  const queryKeys = symbolsList.value.map(getItemLookupKey);
+  if (queryKeys.length === 0) return;
 
   aborter?.abort();
   aborter = new AbortController();
 
   let hasAllCached = true;
   const cachedBatch: Record<string, StockQuoteData> = {};
-  for (const s of symbols) {
-    const c = getCachedQuote(s);
+  for (let i = 0; i < symbolsList.value.length; i++) {
+    const item = symbolsList.value[i];
+    const key = queryKeys[i];
+    const c = getCachedQuote(key) || getCachedQuote(item.symbol);
     if (c) {
-      cachedBatch[s.toUpperCase()] = c;
+      cachedBatch[key] = c;
+      cachedBatch[item.symbol.toUpperCase()] = c;
     } else {
       hasAllCached = false;
     }
@@ -256,11 +287,18 @@ async function load(force = false): Promise<void> {
   error.value = null;
 
   try {
-    const fresh = await fetchMultipleStockQuotes(symbols, aborter.signal, force);
+    const fresh = await fetchMultipleStockQuotes(queryKeys, aborter.signal, force);
     if (Object.keys(fresh).length === 0 && Object.keys(quotes.value).length === 0) {
       throw new Error("Quotes unavailable. Please try refreshing.");
     }
-    applyQuotesWithFlash(fresh, false);
+    const aliased: Record<string, StockQuoteData> = { ...fresh };
+    for (const item of symbolsList.value) {
+      const k = getItemLookupKey(item);
+      if (fresh[k]) {
+        aliased[item.symbol.toUpperCase()] = fresh[k];
+      }
+    }
+    applyQuotesWithFlash(aliased, false);
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") return;
     if (Object.keys(quotes.value).length === 0) {
@@ -383,8 +421,14 @@ onBeforeUnmount(() => {
             </span>
 
             <span class="min-w-0 truncate font-bold text-xs tracking-wider text-amber-400"
-              :title="currentSymbol.symbol">
-              {{ currentSymbol.symbol }}
+              :title="currentSymbol.ticker || currentSymbol.symbol">
+              {{ getDisplaySymbol(currentSymbol) }}
+            </span>
+            <span
+              v-if="getDisplayExchange(currentSymbol)"
+              class="text-[9px] font-mono uppercase px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold shrink-0 leading-none"
+            >
+              {{ getDisplayExchange(currentSymbol) }}
             </span>
             <span class="truncate text-[11px] text-zinc-400 max-w-[90px] uppercase">
               {{ currentQuote?.name || currentSymbol.name }}
@@ -654,10 +698,10 @@ onBeforeUnmount(() => {
         >
           <div
             v-for="item in symbolsList"
-            :key="item.symbol"
+            :key="item.ticker || item.symbol"
             class="mo-stock-tile group relative flex min-h-0 min-w-0 flex-col justify-between overflow-hidden rounded-xs border border-zinc-800/90 bg-zinc-950/70 p-1.5 transition-all duration-200 hover:border-amber-500/60 hover:bg-zinc-900/90 hover:shadow-[0_0_12px_rgba(245,158,11,0.12)] cursor-pointer active:scale-[0.98]"
             :class="[
-              getTileBorderClass(item.symbol),
+              getTileBorderClass(item),
               getFlashClass(item.symbol)
             ]"
             role="button"
@@ -668,45 +712,51 @@ onBeforeUnmount(() => {
             @click="selectSymbol(item.symbol)"
           >
             <div class="mo-tile-heading flex min-w-0 items-center justify-between gap-1">
-              <span class="mo-tile-symbol font-bold text-amber-400" :title="item.symbol">{{ item.symbol }}</span>
+              <span class="mo-tile-symbol font-bold text-amber-400 truncate" :title="item.ticker || item.symbol">{{ getDisplaySymbol(item) }}</span>
+              <span
+                v-if="getDisplayExchange(item)"
+                class="text-[8px] font-mono uppercase px-1 py-0.2 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold shrink-0 leading-none"
+              >
+                {{ getDisplayExchange(item) }}
+              </span>
             </div>
-            <p class="mo-tile-name truncate text-[10px] text-zinc-400" :title="getQuoteFor(item.symbol)?.name || item.name">
-              {{ getQuoteFor(item.symbol)?.name || item.name }}
+            <p class="mo-tile-name truncate text-[10px] text-zinc-400" :title="getQuoteFor(item)?.name || item.name">
+              {{ getQuoteFor(item)?.name || item.name }}
             </p>
             <div class="mo-tile-price font-black text-white">
-              {{ formatQuotePrice(getQuoteFor(item.symbol)?.price) }}
-              <span class="mo-tile-currency text-[9px] font-semibold text-amber-400">{{ getQuoteFor(item.symbol)?.currency }}</span>
+              {{ formatQuotePrice(getQuoteFor(item)?.price) }}
+              <span class="mo-tile-currency text-[9px] font-semibold text-amber-400">{{ getQuoteFor(item)?.currency }}</span>
             </div>
             <div class="mo-tile-performance flex flex-wrap items-center justify-between gap-1">
-              <div class="mo-tile-change inline-flex w-fit max-w-full items-center gap-1 rounded-xs px-1.5 py-0.5 font-bold" :class="getTileBadgeClass(item.symbol)">
+              <div class="mo-tile-change inline-flex w-fit max-w-full items-center gap-1 rounded-xs px-1.5 py-0.5 font-bold" :class="getTileBadgeClass(item)">
                 <component
-                  v-if="getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod) !== null"
-                  :is="isTilePositive(item.symbol) ? ArrowUp : ArrowDown"
+                  v-if="getQuoteChangePercent(getQuoteFor(item), selectedPeriod) !== null"
+                  :is="isTilePositive(item) ? ArrowUp : ArrowDown"
                   class="h-3 w-3 shrink-0"
                 />
-                <span>{{ getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod) === null ? '--' : `${isTilePositive(item.symbol) ? '+' : ''}${getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod)!.toFixed(2)}%` }}</span>
+                <span>{{ getQuoteChangePercent(getQuoteFor(item), selectedPeriod) === null ? '--' : `${isTilePositive(item) ? '+' : ''}${getQuoteChangePercent(getQuoteFor(item), selectedPeriod)!.toFixed(2)}%` }}</span>
               </div>
               <span
                 class="mo-tile-net text-[10px] font-semibold"
-                :class="getQuoteChangePercent(getQuoteFor(item.symbol), selectedPeriod) === null ? 'text-zinc-400' : isTilePositive(item.symbol) ? 'text-emerald-400' : 'text-rose-400'"
+                :class="getQuoteChangePercent(getQuoteFor(item), selectedPeriod) === null ? 'text-zinc-400' : isTilePositive(item) ? 'text-emerald-400' : 'text-rose-400'"
                 :title="`${selectedPeriod} net change`"
               >
-                {{ formatQuoteChange(getQuoteNetChange(getQuoteFor(item.symbol), selectedPeriod) ?? undefined) }}
+                {{ formatQuoteChange(getQuoteNetChange(getQuoteFor(item), selectedPeriod) ?? undefined) }}
               </span>
             </div>
             <dl class="mo-tile-range grid grid-cols-2 gap-1 border-t border-zinc-800/70 pt-1 text-[9px] leading-tight">
               <div class="min-w-0">
                 <dt class="text-zinc-500">DAY LOW</dt>
-                <dd class="text-zinc-300">{{ formatQuotePrice(getQuoteFor(item.symbol)?.dayLow) }}</dd>
+                <dd class="text-zinc-300">{{ formatQuotePrice(getQuoteFor(item)?.dayLow) }}</dd>
               </div>
               <div class="min-w-0 text-right">
                 <dt class="text-zinc-500">DAY HIGH</dt>
-                <dd class="text-zinc-300">{{ formatQuotePrice(getQuoteFor(item.symbol)?.dayHigh) }}</dd>
+                <dd class="text-zinc-300">{{ formatQuotePrice(getQuoteFor(item)?.dayHigh) }}</dd>
               </div>
             </dl>
             <div class="mo-tile-volume flex items-center justify-between gap-1 text-[9px] text-zinc-400">
               <span>VOLUME</span>
-              <span>{{ getQuoteFor(item.symbol) ? formatCompactNumber(getQuoteFor(item.symbol)!.volume) : '--' }}</span>
+              <span>{{ getQuoteFor(item) ? formatCompactNumber(getQuoteFor(item)!.volume) : '--' }}</span>
             </div>
           </div>
         </TransitionGroup>

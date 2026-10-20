@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import { useDeviceAuth } from "../composables/useDeviceAuth";
 import { useWidgets } from "../composables/useWidgets";
 import { asStockConfig } from "../types/widget";
 import DevicePairingView from "./DevicePairingView.vue";
+import WalkieTalkieWidget from "./widgets/WalkieTalkieWidget.vue";
 import StockWidget from "./widgets/StockWidget.vue";
 
 const {
@@ -17,6 +18,11 @@ const {
 } = useDeviceAuth();
 
 const { widgets } = useWidgets();
+
+const walkieWidget = computed(() => widgets.value.find(w => w.widget_key === "walkie_talkie" && w.enabled));
+const showStocks = computed(() => !walkieWidget.value || selectedPanel.value === "stock");
+const selectedPanel = ref("walkie");
+watch(() => walkieWidget.value, () => { selectedPanel.value = "walkie"; });
 
 const stockWidget = computed(() => {
   return widgets.value.find(
@@ -33,11 +39,17 @@ const stockConfig = computed(() => {
   <div class="mo-authcard-root relative flex h-full w-full flex-col justify-between overflow-hidden">
     <!-- Authenticated State -->
     <template v-if="isAuthenticated && user">
-      <!-- Stock widget if configured -->
-      <StockWidget v-if="stockConfig" :config="stockConfig" />
+      <div v-if="walkieWidget && stockConfig" class="flex shrink-0 gap-1 border-b border-border bg-card p-1.5" role="group" aria-label="Device widgets">
+        <button class="flex-1 rounded-lg px-3 py-1.5 text-xs font-semibold" :class="selectedPanel === 'walkie' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'" @click="selectedPanel = 'walkie'">Walkie-talkie</button>
+        <button class="flex-1 rounded-lg px-3 py-1.5 text-xs font-semibold" :class="selectedPanel === 'stock' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'" @click="selectedPanel = 'stock'">Stocks</button>
+      </div>
+      <div v-if="walkieWidget" v-show="!showStocks" class="min-h-0 flex-1">
+        <WalkieTalkieWidget :config="walkieWidget.config" />
+      </div>
+      <div v-if="stockConfig" v-show="showStocks" class="min-h-0 flex-1"><StockWidget :config="stockConfig" /></div>
 
       <!-- No stock configured: placeholder state -->
-      <div v-else class="relative flex h-full w-full flex-col items-center justify-center p-4 text-center">
+      <div v-if="!stockConfig && !walkieWidget" class="relative flex h-full w-full flex-col items-center justify-center p-4 text-center">
         <span class="text-xs text-muted-foreground">No stock widget configured.</span>
       </div>
     </template>

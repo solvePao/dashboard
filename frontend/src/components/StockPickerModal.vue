@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import AppDialog from "./AppDialog.vue";
-import { nextTick, onBeforeUnmount, ref, watch, useTemplateRef } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch, useTemplateRef } from "vue";
 import {
   ArrowLeftRight,
   Check,
@@ -15,7 +15,10 @@ import {
   fetchStockQuote,
   formatQuoteChange,
   formatQuotePrice,
+  searchStockSymbols,
+  type MarketFilter,
   type StockQuoteData,
+  type StockSearchResult,
 } from "../services/stockApi";
 import type { StockSymbolItem } from "../types/widget";
 
@@ -30,12 +33,15 @@ const emit = defineEmits<{
 
 type ActiveTab = "stock" | "forex";
 const activeTab = ref<ActiveTab>("stock");
+const activeMarket = ref<MarketFilter>("all");
 
 const query = ref("");
 const fromCurrency = ref("USD");
 const toCurrency = ref("INR");
 
+const searchResults = ref<StockSearchResult[]>([]);
 const verifiedQuote = ref<StockQuoteData | null>(null);
+const searching = ref(false);
 const verifying = ref(false);
 const error = ref<string | null>(null);
 const inputRef = useTemplateRef<HTMLInputElement>("inputRef");
@@ -45,6 +51,92 @@ interface CurrencyOption {
   name: string;
   symbol: string;
 }
+
+interface MarketPreset {
+  label: string;
+  ticker: string;
+  symbol: string;
+  exchange: string;
+  currency: string;
+}
+
+const MARKET_FILTERS: { key: MarketFilter; label: string; icon?: unknown }[] = [
+  { key: "all", label: "All Markets" },
+  { key: "india", label: "🇮🇳 India (NSE / BSE)" },
+  { key: "nyse", label: "🏛️ NYSE (New York)" },
+  { key: "us", label: "🇺🇸 NASDAQ / US" },
+  { key: "crypto", label: "🪙 Crypto" },
+];
+
+const INDIA_PRESETS: MarketPreset[] = [
+  { label: "NIFTY 50", ticker: "NSE:NIFTY", symbol: "NIFTY", exchange: "NSE", currency: "INR" },
+  { label: "SENSEX", ticker: "BSE:SENSEX", symbol: "SENSEX", exchange: "BSE", currency: "INR" },
+  { label: "Reliance", ticker: "NSE:RELIANCE", symbol: "RELIANCE", exchange: "NSE", currency: "INR" },
+  { label: "TCS", ticker: "NSE:TCS", symbol: "TCS", exchange: "NSE", currency: "INR" },
+  { label: "HDFC Bank", ticker: "NSE:HDFCBANK", symbol: "HDFCBANK", exchange: "NSE", currency: "INR" },
+  { label: "Infosys", ticker: "NSE:INFY", symbol: "INFY", exchange: "NSE", currency: "INR" },
+  { label: "ICICI Bank", ticker: "NSE:ICICIBANK", symbol: "ICICIBANK", exchange: "NSE", currency: "INR" },
+  { label: "Bharti Airtel", ticker: "NSE:BHARTIARTL", symbol: "BHARTIARTL", exchange: "NSE", currency: "INR" },
+  { label: "State Bank", ticker: "NSE:SBIN", symbol: "SBIN", exchange: "NSE", currency: "INR" },
+  { label: "Tata Motors", ticker: "NSE:TMPV", symbol: "TMPV", exchange: "NSE", currency: "INR" },
+  { label: "ITC", ticker: "NSE:ITC", symbol: "ITC", exchange: "NSE", currency: "INR" },
+  { label: "L&T", ticker: "NSE:LT", symbol: "LT", exchange: "NSE", currency: "INR" },
+];
+
+const NYSE_PRESETS: MarketPreset[] = [
+  { label: "NYSE Index", ticker: "NYSE:NYA", symbol: "NYA", exchange: "NYSE", currency: "USD" },
+  { label: "Berkshire", ticker: "NYSE:BRK.B", symbol: "BRK.B", exchange: "NYSE", currency: "USD" },
+  { label: "JPMorgan", ticker: "NYSE:JPM", symbol: "JPM", exchange: "NYSE", currency: "USD" },
+  { label: "Visa", ticker: "NYSE:V", symbol: "V", exchange: "NYSE", currency: "USD" },
+  { label: "Coca-Cola", ticker: "NYSE:KO", symbol: "KO", exchange: "NYSE", currency: "USD" },
+  { label: "Disney", ticker: "NYSE:DIS", symbol: "DIS", exchange: "NYSE", currency: "USD" },
+  { label: "IBM", ticker: "NYSE:IBM", symbol: "IBM", exchange: "NYSE", currency: "USD" },
+  { label: "ExxonMobil", ticker: "NYSE:XOM", symbol: "XOM", exchange: "NYSE", currency: "USD" },
+  { label: "Mastercard", ticker: "NYSE:MA", symbol: "MA", exchange: "NYSE", currency: "USD" },
+  { label: "Pfizer", ticker: "NYSE:PFE", symbol: "PFE", exchange: "NYSE", currency: "USD" },
+  { label: "Nike", ticker: "NYSE:NKE", symbol: "NKE", exchange: "NYSE", currency: "USD" },
+  { label: "Eli Lilly", ticker: "NYSE:LLY", symbol: "LLY", exchange: "NYSE", currency: "USD" },
+];
+
+const NASDAQ_PRESETS: MarketPreset[] = [
+  { label: "Apple", ticker: "NASDAQ:AAPL", symbol: "AAPL", exchange: "NASDAQ", currency: "USD" },
+  { label: "Microsoft", ticker: "NASDAQ:MSFT", symbol: "MSFT", exchange: "NASDAQ", currency: "USD" },
+  { label: "Nvidia", ticker: "NASDAQ:NVDA", symbol: "NVDA", exchange: "NASDAQ", currency: "USD" },
+  { label: "Amazon", ticker: "NASDAQ:AMZN", symbol: "AMZN", exchange: "NASDAQ", currency: "USD" },
+  { label: "Alphabet", ticker: "NASDAQ:GOOGL", symbol: "GOOGL", exchange: "NASDAQ", currency: "USD" },
+  { label: "Tesla", ticker: "NASDAQ:TSLA", symbol: "TSLA", exchange: "NASDAQ", currency: "USD" },
+];
+
+const CRYPTO_PRESETS: MarketPreset[] = [
+  { label: "Bitcoin", ticker: "BINANCE:BTCUSDT", symbol: "BTC", exchange: "CRYPTO", currency: "USD" },
+  { label: "Ethereum", ticker: "BINANCE:ETHUSDT", symbol: "ETH", exchange: "CRYPTO", currency: "USD" },
+  { label: "Solana", ticker: "BINANCE:SOLUSDT", symbol: "SOL", exchange: "CRYPTO", currency: "USD" },
+];
+
+const currentPresets = computed<MarketPreset[]>(() => {
+  if (activeMarket.value === "india") return INDIA_PRESETS;
+  if (activeMarket.value === "nyse") return NYSE_PRESETS;
+  if (activeMarket.value === "us") return NASDAQ_PRESETS;
+  if (activeMarket.value === "crypto") return CRYPTO_PRESETS;
+  return [
+    INDIA_PRESETS[0], // NIFTY 50
+    NYSE_PRESETS[0],  // NYSE Index
+    INDIA_PRESETS[2], // Reliance
+    NYSE_PRESETS[4],  // Coca-Cola
+    NASDAQ_PRESETS[0],// Apple
+    CRYPTO_PRESETS[0],// Bitcoin
+    INDIA_PRESETS[5], // Infosys
+    NYSE_PRESETS[1],  // Berkshire
+  ];
+});
+
+const searchPlaceholder = computed<string>(() => {
+  if (activeMarket.value === "india") return "Search NSE / BSE stocks or indices (e.g. RELIANCE, TCS, NIFTY)...";
+  if (activeMarket.value === "nyse") return "Search NYSE stocks (e.g. KO, DIS, IBM, BRK.B, NYA)...";
+  if (activeMarket.value === "us") return "Search NASDAQ stocks (e.g. AAPL, NVDA, MSFT)...";
+  if (activeMarket.value === "crypto") return "Search crypto (e.g. BTCUSD, ETHUSDT)...";
+  return "Search stocks, indices, or crypto across all markets...";
+});
 
 const POPULAR_CURRENCIES: CurrencyOption[] = [
   { code: "USD", name: "US Dollar", symbol: "$" },
@@ -109,6 +201,58 @@ async function verifySymbol(sym: string): Promise<void> {
   }
 }
 
+async function executeSearch(text: string): Promise<void> {
+  clearVerification();
+  const trimmed = text.trim();
+  if (!trimmed) {
+    searchResults.value = [];
+    verifiedQuote.value = null;
+    error.value = null;
+    searching.value = false;
+    return;
+  }
+
+  aborter = new AbortController();
+  searching.value = true;
+  error.value = null;
+
+  try {
+    const results = await searchStockSymbols(trimmed, activeMarket.value, aborter.signal);
+    searchResults.value = results;
+
+    // If single exact match or explicit ticker entered, automatically verify details
+    if (results.length > 0) {
+      const exactMatch = results.find(
+        (r) => r.ticker.toUpperCase() === trimmed.toUpperCase() || r.symbol.toUpperCase() === trimmed.toUpperCase()
+      );
+      if (exactMatch) {
+        await verifySymbol(exactMatch.ticker);
+      } else if (trimmed.includes(":") || results.length === 1) {
+        await verifySymbol(results[0].ticker);
+      }
+    } else {
+      // Fallback direct verification attempt
+      await verifySymbol(trimmed);
+    }
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") return;
+    searchResults.value = [];
+    error.value = err instanceof Error ? err.message : "Search failed. Check your query.";
+  } finally {
+    searching.value = false;
+  }
+}
+
+function selectSearchResult(item: StockSearchResult): void {
+  query.value = item.ticker;
+  void verifySymbol(item.ticker);
+}
+
+function selectPresetChip(preset: MarketPreset): void {
+  query.value = preset.ticker;
+  void verifySymbol(preset.ticker);
+}
+
 function verifyCurrentForexPair(): void {
   if (fromCurrency.value === toCurrency.value) {
     error.value = "Please select two different currencies.";
@@ -126,7 +270,7 @@ function swapCurrencies(): void {
   verifyCurrentForexPair();
 }
 
-function selectPreset(pair: { from: string; to: string }): void {
+function selectForexPreset(pair: { from: string; to: string }): void {
   fromCurrency.value = pair.from;
   toCurrency.value = pair.to;
   verifyCurrentForexPair();
@@ -135,6 +279,7 @@ function selectPreset(pair: { from: string; to: string }): void {
 watch(activeTab, (tab) => {
   clearVerification();
   verifiedQuote.value = null;
+  searchResults.value = [];
   error.value = null;
   if (tab === "stock") {
     query.value = "";
@@ -144,16 +289,26 @@ watch(activeTab, (tab) => {
   }
 });
 
+watch(activeMarket, () => {
+  if (activeTab.value !== "stock") return;
+  searchResults.value = [];
+  if (query.value.trim().length >= 1) {
+    void executeSearch(query.value);
+  }
+});
+
 watch(query, (newVal) => {
   if (activeTab.value !== "stock") return;
-  verifiedQuote.value = null;
-  error.value = null;
   if (debounceTimer) clearTimeout(debounceTimer);
   const trimmed = newVal.trim();
   if (trimmed.length >= 1) {
     debounceTimer = setTimeout(() => {
-      void verifySymbol(trimmed);
-    }, 450);
+      void executeSearch(trimmed);
+    }, 350);
+  } else {
+    searchResults.value = [];
+    verifiedQuote.value = null;
+    error.value = null;
   }
 });
 
@@ -167,6 +322,8 @@ function handleAdd(): void {
   if (!verifiedQuote.value) return;
   emit("select", {
     symbol: verifiedQuote.value.symbol,
+    ticker: verifiedQuote.value.ticker,
+    exchange: verifiedQuote.value.exchange,
     name: verifiedQuote.value.name,
     currency: verifiedQuote.value.currency,
   });
@@ -177,9 +334,12 @@ watch(
   (isOpen) => {
     if (isOpen) {
       activeTab.value = "stock";
+      activeMarket.value = "all";
       query.value = "";
+      searchResults.value = [];
       verifiedQuote.value = null;
       error.value = null;
+      searching.value = false;
       verifying.value = false;
       void nextTick(() => inputRef.value?.focus());
     } else {
@@ -195,13 +355,13 @@ onBeforeUnmount(() => {
 
 <template>
   <AppDialog :open="open" title="Add market symbol" @close="emit('close')">
-    <div class="fe-stockmodal-header flex items-center justify-between border-b border-border/80 pb-4">
+    <div class="fe-stockmodal-header flex items-center justify-between border-b border-border/80 pb-3">
       <div>
         <h2 id="stock-picker-title" class="text-base font-semibold leading-tight text-foreground">
           Add Market Symbol
         </h2>
         <p class="text-xs text-muted-foreground mt-0.5">
-          Add equities, crypto, or live foreign exchange pairs
+          Indian equities (NSE/BSE), NYSE, NASDAQ, crypto, or forex pairs
         </p>
       </div>
       <button
@@ -214,8 +374,8 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <!-- Segmented Tabs: Stock/Crypto vs. Currency Pair -->
-    <div class="mt-4 flex rounded-xl bg-muted/60 p-1 border border-border/60">
+    <!-- Segmented Tabs: Stocks & Markets vs. Currency Pair -->
+    <div class="mt-3 flex rounded-xl bg-muted/60 p-1 border border-border/60">
       <button
         type="button"
         class="flex flex-1 items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-semibold transition cursor-pointer"
@@ -227,7 +387,7 @@ onBeforeUnmount(() => {
         @click="activeTab = 'stock'"
       >
         <Search class="h-3.5 w-3.5" />
-        <span>Stocks & Crypto</span>
+        <span>Stocks & Markets</span>
       </button>
       <button
         type="button"
@@ -244,28 +404,120 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <!-- TAB 1: Stock / Crypto -->
-    <div v-if="activeTab === 'stock'" class="mt-4">
+    <!-- TAB 1: Stocks & Markets -->
+    <div v-if="activeTab === 'stock'" class="mt-3 space-y-3">
+      <!-- Market Category Filter Pills -->
+      <div class="flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px] scrollbar-none">
+        <button
+          v-for="m in MARKET_FILTERS"
+          :key="m.key"
+          type="button"
+          class="shrink-0 rounded-full border px-2.5 py-1 font-medium transition cursor-pointer"
+          :class="
+            activeMarket === m.key
+              ? 'border-primary bg-primary text-primary-foreground font-semibold shadow-xs'
+              : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground'
+          "
+          @click="activeMarket = m.key"
+        >
+          {{ m.label }}
+        </button>
+      </div>
+
+      <!-- Search Input -->
       <div class="relative">
         <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <input
           ref="inputRef"
           v-model="query"
           type="text"
-          placeholder="e.g. AAPL, NVDA, BTCUSD, RELIANCE"
+          :placeholder="searchPlaceholder"
           autocomplete="off"
-          class="w-full rounded-lg border border-input bg-background py-2.5 pl-9 pr-9 text-sm font-mono uppercase text-foreground placeholder:font-sans placeholder:normal-case placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @keydown.enter.prevent="query.trim() && verifySymbol(query)"
+          class="w-full rounded-lg border border-input bg-background py-2.5 pl-9 pr-9 text-xs sm:text-sm font-mono uppercase text-foreground placeholder:font-sans placeholder:normal-case placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          @keydown.enter.prevent="query.trim() && executeSearch(query)"
         />
         <Loader2
-          v-if="verifying"
+          v-if="searching || verifying"
           class="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-primary"
         />
+      </div>
+
+      <!-- Quick Presets Tray (when query is short or empty) -->
+      <div v-if="query.trim().length === 0" class="rounded-xl border border-border/70 bg-muted/20 p-2.5">
+        <div class="flex items-center justify-between mb-1.5">
+          <span class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+            Popular in {{ MARKET_FILTERS.find(f => f.key === activeMarket)?.label }}
+          </span>
+          <span class="text-[10px] text-muted-foreground">1-Click Preview</span>
+        </div>
+        <div class="flex flex-wrap gap-1.5">
+          <button
+            v-for="preset in currentPresets"
+            :key="preset.ticker"
+            type="button"
+            class="inline-flex items-center gap-1.5 rounded-md border border-border/80 bg-background/80 px-2 py-1 text-[11px] font-medium text-foreground transition hover:border-primary/50 hover:bg-muted active:scale-95 cursor-pointer"
+            @click="selectPresetChip(preset)"
+          >
+            <span class="font-semibold">{{ preset.label }}</span>
+            <span class="text-[9px] font-mono uppercase px-1 py-0.2 rounded bg-muted border border-border/60 text-muted-foreground font-bold">
+              {{ preset.exchange }}
+            </span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Search Results List (Disambiguation) -->
+      <div
+        v-if="searchResults.length > 0 && query.trim().length > 0"
+        class="space-y-1 max-h-48 overflow-y-auto overscroll-contain pr-1 rounded-lg border border-border/60 bg-muted/10 p-1"
+      >
+        <div class="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground flex justify-between">
+          <span>Search Results ({{ searchResults.length }})</span>
+          <span>Click to select</span>
+        </div>
+        <button
+          v-for="item in searchResults"
+          :key="item.ticker"
+          type="button"
+          class="w-full flex items-center justify-between rounded-md p-2 text-left transition hover:bg-muted/80 cursor-pointer"
+          :class="
+            verifiedQuote && verifiedQuote.ticker === item.ticker
+              ? 'bg-primary/10 border border-primary/40'
+              : 'border border-transparent'
+          "
+          @click="selectSearchResult(item)"
+        >
+          <div class="min-w-0 pr-2">
+            <div class="flex items-center gap-1.5">
+              <span
+                v-if="item.exchange"
+                class="text-[9px] font-mono uppercase px-1 py-0.2 rounded bg-primary/10 border border-primary/20 text-primary font-bold shrink-0"
+              >
+                {{ item.exchange }}
+              </span>
+              <span class="font-mono font-bold text-xs text-foreground">{{ item.symbol }}</span>
+            </div>
+            <p class="truncate text-[11px] text-muted-foreground mt-0.5">{{ item.name }}</p>
+          </div>
+
+          <div class="text-right shrink-0">
+            <p class="font-mono text-xs font-semibold text-foreground">
+              {{ formatQuotePrice(item.price) }}
+              <span class="text-[10px] text-muted-foreground font-sans">{{ item.currency }}</span>
+            </p>
+            <p
+              class="text-[10px] font-semibold"
+              :class="item.change >= 0 ? 'text-emerald-500' : 'text-rose-500'"
+            >
+              {{ item.change >= 0 ? '+' : '' }}{{ item.changePercent.toFixed(2) }}%
+            </p>
+          </div>
+        </button>
       </div>
     </div>
 
     <!-- TAB 2: Currency Pair (Forex) -->
-    <div v-else class="mt-4 space-y-3">
+    <div v-else class="mt-3 space-y-3">
       <div class="flex items-center gap-2">
         <!-- From Currency -->
         <div class="flex-1">
@@ -326,7 +578,7 @@ onBeforeUnmount(() => {
                 ? 'border-primary bg-primary/10 text-primary font-bold'
                 : ''
             "
-            @click="selectPreset(pair)"
+            @click="selectForexPreset(pair)"
           >
             {{ pair.from }} → {{ pair.to }}
           </button>
@@ -346,11 +598,17 @@ onBeforeUnmount(() => {
     <!-- Verified Quote Preview Card -->
     <div
       v-else-if="verifiedQuote"
-      class="mt-4 rounded-xl border border-border bg-muted/40 p-4 transition-all animate-in fade-in-50"
+      class="mt-3 rounded-xl border border-border bg-muted/40 p-3.5 transition-all animate-in fade-in-50"
     >
       <div class="flex items-center justify-between">
         <div>
           <div class="flex items-center gap-2">
+            <span
+              v-if="verifiedQuote.exchange"
+              class="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-primary/15 border border-primary/30 text-primary font-bold"
+            >
+              {{ verifiedQuote.exchange }}
+            </span>
             <span class="text-base font-bold text-foreground font-mono">
               {{ verifiedQuote.symbol }}
             </span>
@@ -358,7 +616,7 @@ onBeforeUnmount(() => {
               {{ verifiedQuote.currency }}
             </span>
           </div>
-          <p class="text-xs text-muted-foreground truncate max-w-[220px]">
+          <p class="text-xs text-muted-foreground truncate max-w-[220px] mt-0.5">
             {{ verifiedQuote.name }}
           </p>
         </div>
@@ -377,13 +635,13 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div class="mt-4 pt-3 border-t border-border/60 flex items-center justify-between">
-        <span class="text-[10px] text-muted-foreground">
-          Feed: TradingView Scanner
+      <div class="mt-3 pt-3 border-t border-border/60 flex items-center justify-between">
+        <span class="text-[10px] text-muted-foreground font-mono">
+          Feed: {{ verifiedQuote.ticker }}
         </span>
         <button
           type="button"
-          class="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-xs transition hover:bg-primary/90 cursor-pointer"
+          class="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-1.5 text-xs font-semibold text-primary-foreground shadow-xs transition hover:bg-primary/90 cursor-pointer"
           @click="handleAdd"
         >
           <Check class="h-3.5 w-3.5" />
@@ -394,10 +652,10 @@ onBeforeUnmount(() => {
 
     <!-- Empty state hint -->
     <p
-      v-else-if="!verifying && activeTab === 'stock' && query.trim().length === 0"
-      class="mt-3 text-center text-xs text-muted-foreground"
+      v-else-if="!searching && !verifying && activeTab === 'stock' && query.trim().length === 0"
+      class="mt-2 text-center text-[11px] text-muted-foreground"
     >
-      Enter a ticker above. Supports US stocks, international equities (e.g. NSE:RELIANCE), crypto, and forex pairs.
+      Select a market above, click a preset, or type any stock or index symbol to preview.
     </p>
   </AppDialog>
 </template>

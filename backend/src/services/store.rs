@@ -57,6 +57,8 @@ pub trait DeviceNotifier {
     /// Tells a live device its widget set changed. Unlike revocation the
     /// socket stays open; the device re-fetches and re-renders.
     async fn notify_widgets_updated(&self, device_token: &str);
+    /// Tells a live device to wake and activate walkie-talkie for a group.
+    async fn notify_walkie_activate(&self, _device_token: &str, _group_id: &str) {}
 }
 
 /// Used when the notifier binding is unavailable: revocation still commits.
@@ -65,6 +67,7 @@ pub struct NoNotify;
 impl DeviceNotifier for NoNotify {
     async fn notify_revoked(&self, _device_token: &str) {}
     async fn notify_widgets_updated(&self, _device_token: &str) {}
+    async fn notify_walkie_activate(&self, _device_token: &str, _group_id: &str) {}
 }
 
 /// D1 side of per-device widgets: config rows only. Widget semantics

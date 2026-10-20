@@ -1,5 +1,5 @@
 import type { Component } from "vue";
-import { CloudSun, TrendingUp } from "@lucide/vue";
+import { CloudSun, TrendingUp, Radio } from "@lucide/vue";
 
 /**
  * Widget Registry: the single list driving the Manage-sheet dropdown
@@ -15,6 +15,7 @@ export interface WidgetDefinition {
 }
 
 export const WIDGET_REGISTRY: readonly WidgetDefinition[] = [
+  { key: "walkie_talkie", label: "Walkie-talkie", description: "Live push-to-talk with up to five friends", icon: Radio },
   {
     key: "weather",
     label: "Weather",

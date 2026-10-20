@@ -1,5 +1,6 @@
 import type { Component } from "vue";
 import WeatherWidget from "../components/widgets/WeatherWidget.vue";
+import WalkieTalkieWidget from "../components/widgets/WalkieTalkieWidget.vue";
 import StockWidget from "../components/widgets/StockWidget.vue";
 
 /**
@@ -16,6 +17,7 @@ export interface MobileWidgetEntry {
 export const MOBILE_WIDGET_REGISTRY: readonly MobileWidgetEntry[] = [
   { key: "weather", component: WeatherWidget },
   { key: "stock", component: StockWidget },
+  { key: "walkie_talkie", component: WalkieTalkieWidget },
 ];
 
 export function getMobileWidget(key: string): Component | null {

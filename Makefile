@@ -45,7 +45,7 @@ install-mobile: check-node-pnpm
 		(cd mobile && pnpm install); \
 	fi
 
-start-api: ## Run backend worker locally (local SQLite D1, never remote)
+start-api: db-schema-local ## Run backend worker locally (local SQLite D1, never remote)
 	cd backend && npx wrangler dev --local
 
 deploy-api: ## Deploy backend worker to production (remote D1)
@@ -59,8 +59,9 @@ test-api: ## Run backend Rust tests in parallel (host, mocked D1/Google)
 test-coverage: ## Run backend Rust tests and enforce 100% coverage
 	cd backend && cargo llvm-cov --fail-under-lines 100 --fail-under-regions 100 --fail-under-functions 100
 
-db-schema-local: ## Apply backend/schema.sql to the local D1 (SQLite) database
+db-schema-local: ## Apply schema and migrations to the local D1 (SQLite) database
 	cd backend && npx wrangler d1 execute dashboard --local --file=./schema.sql
+	cd backend && npx wrangler d1 migrations apply dashboard --local
 
 db-schema-prod: ## Apply backend/schema.sql to the PRODUCTION D1 database (remote)
 	pnpm db:migrate:production

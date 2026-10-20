@@ -23,11 +23,11 @@ export async function saveWidgetsApi(
   token: string,
   deviceToken: string,
   widgets: DeviceWidget[]
-): Promise<DeviceWidget[]> {
+): Promise<WidgetsResponse & { cleanup_pending?: boolean }> {
   const data = await apiClient<WidgetsResponse>(widgetsPath(deviceToken), {
     method: "PUT",
     headers: authHeader(token),
     body: JSON.stringify({ widgets }),
   });
-  return Array.isArray(data.widgets) ? data.widgets : [];
+  return data;
 }

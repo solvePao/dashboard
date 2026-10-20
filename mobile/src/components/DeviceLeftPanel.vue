@@ -5,7 +5,6 @@ import { useDeviceAuth } from "../composables/useDeviceAuth";
 import { useWidgets } from "../composables/useWidgets";
 import { asWeatherConfig } from "../types/widget";
 import DevicePairingSteps from "./DevicePairingSteps.vue";
-import DeviceLinkedSummary from "./DeviceLinkedSummary.vue";
 import WeatherWidget from "./widgets/WeatherWidget.vue";
 import VerticalSlidePager, { type PagerItem } from "./VerticalSlidePager.vue";
 import DeviceAuthorizedMinimalView from "./DeviceAuthorizedMinimalView.vue";
@@ -20,19 +19,11 @@ const {
 
 const { widgets, refreshWidgets, startWidgetSync } = useWidgets();
 
-const activeTab = ref<"weather" | "clock" | "summary">("weather");
+const activeTab = ref<"weather" | "clock">("weather");
 
 const leftPanelItems: PagerItem[] = [
   { key: "weather", label: "View Weather" },
   { key: "clock", label: "View Clock" },
-  { key: "summary", label: "View Device Info" },
-];
-
-const noWeatherActiveTab = ref<"clock" | "summary">("clock");
-
-const noWeatherPanelItems: PagerItem[] = [
-  { key: "clock", label: "View Clock" },
-  { key: "summary", label: "View Device Info" },
 ];
 
 const weatherWidget = computed(() => {
@@ -84,74 +75,12 @@ onMounted(() => {
           </div>
         </template>
 
-        <template #summary>
-          <div class="relative flex h-full w-full flex-col justify-between p-4 sm:p-5 overflow-y-auto">
-            <div class="mo-instr-header flex items-center justify-between border-b border-border/60 pb-3">
-              <div class="flex items-center gap-2">
-                <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                  <Smartphone class="h-4 w-4" />
-                </span>
-                <span class="text-sm font-semibold tracking-tight text-foreground">
-                  Device Linked
-                </span>
-              </div>
-              <span
-                class="cursor-pointer text-[11px] font-medium text-primary hover:underline underline-offset-2"
-                @click="activeTab = 'weather'"
-              >
-                ← View Weather
-              </span>
-            </div>
-
-            <div class="my-auto py-3">
-              <DeviceLinkedSummary />
-            </div>
-
-            <div class="h-5" />
-          </div>
-        </template>
       </VerticalSlidePager>
 
-      <!-- Case 2: No weather configured -> Show Clock & Device Summary in pager -->
-      <VerticalSlidePager
-        v-else-if="user"
-        v-model="noWeatherActiveTab"
-        :items="noWeatherPanelItems"
-        dot-variant="theme"
-      >
-        <template #clock>
-          <div class="relative flex h-full w-full flex-col justify-between overflow-hidden">
-            <DeviceAuthorizedMinimalView :user="user" />
-          </div>
-        </template>
-
-        <template #summary>
-          <div class="relative flex h-full w-full flex-col justify-between p-4 sm:p-5 overflow-y-auto">
-            <div class="mo-instr-header flex items-center justify-between border-b border-border/60 pb-3">
-              <div class="flex items-center gap-2">
-                <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                  <Smartphone class="h-4 w-4" />
-                </span>
-                <span class="text-sm font-semibold tracking-tight text-foreground">
-                  Device Linked
-                </span>
-              </div>
-              <span
-                class="cursor-pointer text-[11px] font-medium text-primary hover:underline underline-offset-2"
-                @click="noWeatherActiveTab = 'clock'"
-              >
-                ← View Clock
-              </span>
-            </div>
-
-            <div class="my-auto py-3">
-              <DeviceLinkedSummary />
-            </div>
-
-            <div class="h-5" />
-          </div>
-        </template>
-      </VerticalSlidePager>
+      <!-- Case 2: No weather configured -> Show Clock directly -->
+      <div v-else-if="user" class="relative flex h-full w-full flex-col justify-between overflow-hidden">
+        <DeviceAuthorizedMinimalView :user="user" />
+      </div>
 
       <!-- Case 3: Authenticated but waiting for profile -->
       <div v-else class="relative flex h-full w-full flex-col justify-between p-4 sm:p-5 overflow-y-auto">

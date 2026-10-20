@@ -41,6 +41,15 @@ pub fn widgets_updated_payload() -> serde_json::Value {
     })
 }
 
+/// Payload pushed to live device sockets when an incoming walkie-talkie call/activation occurs.
+pub fn walkie_activate_payload(group_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "status": "walkie_activate",
+        "group_id": group_id,
+        "message": "Incoming walkie-talkie call."
+    })
+}
+
 #[cfg(not(any(test, coverage)))]
 impl DeviceObject {
     fn broadcast_revoked(&self) {
@@ -71,6 +80,24 @@ impl DeviceObject {
         Response::ok("widgets_updated")
     }
 
+    fn broadcast_walkie_activate(&self, group_id: &str) {
+        let msg = walkie_activate_payload(group_id).to_string();
+
+        for ws in self.state.get_websockets() {
+            let _ = ws.send_with_str(&msg);
+        }
+    }
+
+    async fn handle_walkie_activate(&self, mut req: Request) -> Result<Response> {
+        let body: serde_json::Value = req.json().await.unwrap_or(serde_json::json!({}));
+        let group_id = body
+            .get("group_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        self.broadcast_walkie_activate(group_id);
+        Response::ok("walkie_activated")
+    }
+
     async fn handle_socket(&self) -> Result<Response> {
         let pair = WebSocketPair::new()?;
         self.state.accept_web_socket(&pair.server);
@@ -96,6 +123,7 @@ impl DurableObject for DeviceObject {
         match (req.method(), req.path().as_str()) {
             (Method::Post, "/revoke") => self.handle_revoke().await,
             (Method::Post, "/widgets") => self.handle_widgets_updated().await,
+            (Method::Post, "/walkie-activate") => self.handle_walkie_activate(req).await,
             (Method::Get, _) if is_socket => self.handle_socket().await,
             _ => Response::error("Not found.", 404),
         }

@@ -105,6 +105,7 @@ function admin1ToString(value: unknown): string | undefined {
 
 export interface StockSymbolItem {
   symbol: string;
+  ticker?: string;
   name?: string;
   exchange?: string;
   currency?: string;
@@ -128,9 +129,10 @@ export function asStockConfig(widget: DeviceWidget | undefined): StockWidgetConf
         if (typeof s.symbol === "string" && s.symbol.trim() !== "") {
           validSymbols.push({
             symbol: s.symbol.trim().toUpperCase(),
+            ticker: typeof s.ticker === "string" ? s.ticker.trim().toUpperCase() : undefined,
             name: typeof s.name === "string" ? s.name : undefined,
-            exchange: typeof s.exchange === "string" ? s.exchange : undefined,
-            currency: typeof s.currency === "string" ? s.currency : undefined,
+            exchange: typeof s.exchange === "string" ? s.exchange.trim().toUpperCase() : undefined,
+            currency: typeof s.currency === "string" ? s.currency.trim().toUpperCase() : undefined,
           });
         }
       }

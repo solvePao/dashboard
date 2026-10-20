@@ -208,6 +208,17 @@ impl DeviceNotifier for DoDeviceNotifier {
         let Ok(req) = Request::new_with_init("https://device/widgets", &init) else { return };
         let _ = stub.fetch_with_request(req).await;
     }
+
+    async fn notify_walkie_activate(&self, device_token: &str, group_id: &str) {
+        // Best-effort push; errors are intentionally swallowed.
+        let Ok(stub) = self.namespace.get_by_name(device_token) else { return };
+        let mut init = RequestInit::new();
+        init.method = Method::Post;
+        let body = serde_json::json!({ "group_id": group_id });
+        init.body = Some(body.to_string().into());
+        let Ok(req) = Request::new_with_init("https://device/walkie-activate", &init) else { return };
+        let _ = stub.fetch_with_request(req).await;
+    }
 }
 
 #[cfg(not(any(test, coverage)))]

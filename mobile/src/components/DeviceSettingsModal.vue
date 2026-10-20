@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, watch } from "vue";
 import { Loader2, LogOut, Maximize, Minimize, Moon, Settings, ShieldCheck, X } from "@lucide/vue";
+import DeviceLinkedSummary from "./DeviceLinkedSummary.vue";
 import { useDeviceAuth } from "../composables/useDeviceAuth";
 
 const props = defineProps<{
@@ -81,7 +82,7 @@ onBeforeUnmount(() => {
             <Settings class="h-4 w-4" />
           </span>
           <h2 id="settings-dialog-title" class="text-sm font-semibold text-foreground">
-            Settings & Account
+            Settings & Device
           </h2>
         </div>
         <button
@@ -123,8 +124,8 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <!-- Disconnect Action -->
-        <div class="rounded-xl border border-border/70 bg-muted/20 p-3.5">
+        <!-- Device Linked Status & Disconnect Action -->
+        <div class="rounded-xl border border-border/70 bg-muted/20 p-3.5 space-y-3">
           <div class="flex items-center justify-between text-xs">
             <div>
               <p class="font-medium text-foreground">Device Connection</p>
@@ -132,7 +133,9 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <div class="mt-3">
+          <DeviceLinkedSummary />
+
+          <div class="pt-1 border-t border-border/60">
             <button
               v-if="!isConfirmingDisconnect"
               type="button"

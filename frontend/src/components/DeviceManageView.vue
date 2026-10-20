@@ -27,6 +27,7 @@ import { getWidgetDefinition, WIDGET_REGISTRY } from "../widgets/registry";
 import { useAuth } from "../composables/useAuth";
 import { useDeviceWidgets } from "../composables/useDeviceWidgets";
 import CityPickerModal from "./CityPickerModal.vue";
+import WalkieTalkieSettings from "./WalkieTalkieSettings.vue";
 import StockPickerModal from "./StockPickerModal.vue";
 
 const props = defineProps<{
@@ -46,6 +47,7 @@ const {
   widgets,
   widgetsLoading,
   widgetsError,
+  widgetsNotice,
   saving,
   load,
   addWeatherCity,
@@ -55,6 +57,7 @@ const {
   setWidgetEnabled,
   removeWidget,
   clearWidgets,
+  setWalkieTalkieGroup,
 } = widgetsApi;
 
 const revoking = ref(false);
@@ -118,7 +121,10 @@ function handlePickNone(): void {
 }
 
 function handlePickWidget(key: string): void {
-  if (key === "weather") {
+  if (key === "walkie_talkie") {
+    if (widgets.value.some(w => w.widget_key === key)) return;
+    void setWalkieTalkieGroup(null).catch(() => undefined);
+  } else if (key === "weather") {
     showCityModal.value = true;
   } else if (key === "stock") {
     showStockModal.value = true;
@@ -229,6 +235,8 @@ watch(
         {{ revokeError || widgetsError }}
       </div>
     </div>
+
+    <p v-if="widgetsNotice" role="status" class="rounded-xl border border-border bg-muted p-3 text-xs text-muted-foreground">{{ widgetsNotice }}</p>
 
     <!-- Widgets Configuration Card -->
     <div class="fe-manage-widgets-card rounded-xl border border-border bg-card p-5 text-card-foreground shadow-sm sm:p-6">
@@ -354,6 +362,17 @@ watch(
           </div>
 
           <!-- Cities Chips for Weather Widget -->
+          <WalkieTalkieSettings
+            v-if="widget.widget_key === 'walkie_talkie'"
+            :key="device.token"
+            :device-token="device.token"
+            :group-id="typeof widget.config.group_id === 'string' ? widget.config.group_id : null"
+            :enabled="widget.enabled"
+            :saving="saving"
+            @assigned="setWalkieTalkieGroup"
+            @changed="load"
+          />
+
           <div
             v-if="widget.widget_key === 'weather'"
             class="border-t border-border/60 pt-3"
@@ -426,6 +445,12 @@ watch(
                 class="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-foreground shadow-2xs"
               >
                 <TrendingUp class="h-3 w-3 text-primary shrink-0" />
+                <span
+                  v-if="symItem.exchange || (symItem.ticker && symItem.ticker.includes(':'))"
+                  class="text-[9px] font-mono uppercase px-1.5 py-0.5 rounded bg-primary/10 border border-primary/20 text-primary font-bold shrink-0 leading-none"
+                >
+                  {{ symItem.exchange || symItem.ticker?.split(':')[0] }}
+                </span>
                 <span class="truncate max-w-[150px] font-mono font-semibold">{{ symItem.symbol }}</span>
                 <span
                   v-if="symItem.currency"
