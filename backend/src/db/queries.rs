@@ -1,4 +1,8 @@
 use crate::common::{SESSION_EXPIRY_SQL, SQL_NOW, TOKEN_EXPIRY_SQL, USER_COLUMNS};
+use crate::models::error::{AppError, AppResult};
+use worker::D1Type;
+
+use super::helper::user_id_param;
 
 /// Pure SQL builders mirroring `src/db/users.rs` and `src/db/devices.rs`.
 /// Tested directly and against in-memory SQLite; production `db::*`
@@ -127,5 +131,50 @@ pub fn upsert_device_widget_sql() -> String {
 /// Lowercase lookup key used by the pairing-code index lookup.
 pub fn normalize_session_lookup_key(code_or_session_id: &str) -> String {
     code_or_session_id.to_lowercase()
+}
+
+/// Walkie admission authority subquery shared by the four admit
+/// statements below. Every authority (ownership, code, device binding,
+/// expiries, widget enablement, unconsumed receipt) is rechecked inside
+/// the transaction. Mirrors `walkie::admission::admit`.
+pub fn walkie_admit_eligible_sql() -> String {
+    "SELECT c.token,c.consumed_at,t.user_id FROM walkie_device_codes c JOIN walkie_devices d ON d.token=c.token JOIN device_tokens t ON t.token=c.token JOIN device_widgets w ON w.token=c.token AND w.widget_key='walkie_talkie' AND w.enabled=1 JOIN walkie_groups g ON g.id=? AND g.owner_id=? WHERE c.code=? AND d.device_id=? AND c.expires_at>? AND t.expires_at>strftime('%Y-%m-%dT%H:%M:%fZ','now') AND (c.consumed_at IS NULL OR (c.redeemed_group=g.id AND EXISTS(SELECT 1 FROM walkie_device_members m WHERE m.group_id=g.id AND m.token=c.token)))".to_string()
+}
+
+pub fn walkie_admit_insert_sql() -> String {
+    format!("INSERT INTO walkie_device_members(group_id,token) SELECT ?,e.token FROM ({}) e WHERE e.consumed_at IS NULL ON CONFLICT(group_id,token) DO NOTHING", walkie_admit_eligible_sql())
+}
+
+pub fn walkie_admit_activate_sql() -> String {
+    format!("INSERT INTO walkie_assignments(token,group_id,user_id) SELECT e.token,?,e.user_id FROM ({}) e WHERE e.consumed_at IS NULL AND NOT EXISTS(SELECT 1 FROM walkie_assignments a WHERE a.token=e.token) AND (SELECT count(*) FROM walkie_device_members m WHERE m.token=e.token)=1", walkie_admit_eligible_sql())
+}
+
+pub fn walkie_admit_widget_sql() -> String {
+    format!("UPDATE device_widgets SET config_json=json_object('group_id',?) WHERE widget_key='walkie_talkie' AND token IN(SELECT e.token FROM ({}) e WHERE e.consumed_at IS NULL AND EXISTS(SELECT 1 FROM walkie_assignments a WHERE a.token=e.token AND a.group_id=?))", walkie_admit_eligible_sql())
+}
+
+pub fn walkie_admit_consume_sql() -> String {
+    format!("UPDATE walkie_device_codes SET consumed_at=COALESCE(consumed_at,?),redeemed_group=? WHERE token IN(SELECT e.token FROM ({}) e WHERE EXISTS(SELECT 1 FROM walkie_device_members m WHERE m.token=e.token AND m.group_id=?)) RETURNING token", walkie_admit_eligible_sql())
+}
+
+/// Bind order for the shared authority subquery: group, owner, code,
+/// device, time. Mirrors `walkie::admission::admit`.
+pub fn walkie_admit_args<'a>(
+    group: &'a str,
+    uid: i64,
+    code: &'a str,
+    device: &'a str,
+    time: f64,
+) -> AppResult<Vec<D1Type<'a>>> {
+    let user = user_id_param(uid).map_err(|_| {
+        AppError::internal("Could not update walkie-talkie. Please retry.")
+    })?;
+    Ok(vec![
+        D1Type::Text(group),
+        user,
+        D1Type::Text(code),
+        D1Type::Text(device),
+        D1Type::Real(time),
+    ])
 }
 

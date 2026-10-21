@@ -17,6 +17,7 @@ export interface WalkieState {
   members: WalkieMember[];
   speaker: WalkieSpeaker | null;
   playbackBlocked: boolean;
+  inLiveCall?: boolean;
 }
 export interface MediaResponse {
   session_id: string;

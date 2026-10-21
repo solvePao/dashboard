@@ -128,7 +128,10 @@ impl WalkieGroupObject {
             let connection = id.to_string();
             return self
                 .update_media(id.into(), token, true, move |room| {
-                    let client = room.clients.get_mut(&connection).unwrap();
+                    let client = room
+                        .clients
+                        .get_mut(&connection)
+                        .ok_or_else(|| AppError::forbidden("Audio session ended."))?;
                     if !client
                         .sessions
                         .iter()
@@ -150,7 +153,10 @@ impl WalkieGroupObject {
             let connection = id.to_string();
             return self
                 .update_media(id.into(), token, false, move |room| {
-                    let client = room.clients.get_mut(&connection).unwrap();
+                    let client = room
+                        .clients
+                        .get_mut(&connection)
+                        .ok_or_else(|| AppError::forbidden("Audio session ended."))?;
                     let mut kept = Vec::new();
                     for session in std::mem::take(&mut client.sessions) {
                         if session.target.as_deref() == Some(target.as_str()) {
@@ -216,7 +222,10 @@ impl WalkieGroupObject {
                     } else {
                         None
                     };
-                    let client = room.clients.get_mut(&connection).unwrap();
+                    let client = room
+                        .clients
+                        .get_mut(&connection)
+                        .ok_or_else(|| AppError::forbidden("Audio session ended."))?;
                     if client.sessions.len() >= 5
                         || client
                             .sessions
@@ -244,11 +253,10 @@ impl WalkieGroupObject {
                     let connection = id.to_string();
                     let _ = self
                         .update_media(id.into(), token, false, move |room| {
-                            room.clients
-                                .get_mut(&connection)
-                                .unwrap()
-                                .sessions
-                                .retain(|s| s.id != reservation);
+                            let client = room.clients.get_mut(&connection).ok_or_else(|| {
+                                AppError::forbidden("Audio session ended.")
+                            })?;
+                            client.sessions.retain(|s| s.id != reservation);
                             Ok(())
                         })
                         .await;
@@ -266,7 +274,7 @@ impl WalkieGroupObject {
                 let reserved = room
                     .clients
                     .get_mut(&connection)
-                    .unwrap()
+                    .ok_or_else(|| AppError::forbidden("Audio session ended."))?
                     .sessions
                     .iter_mut()
                     .find(|s| s.id == reservation)
@@ -278,8 +286,10 @@ impl WalkieGroupObject {
             .await?;
             let request = if let Some((_, publisher)) = target {
                 json!({"tracks":[{"location":"remote","sessionId":publisher,"trackName":"audio"}]})
+            } else if let Some(offer) = local_offer {
+                offer
             } else {
-                local_offer.unwrap()
+                return Err(AppError::bad_request("Missing audio track."));
             };
             let mut result = match sfu
                 .request(
@@ -328,7 +338,7 @@ impl WalkieGroupObject {
                     let stored = room
                         .clients
                         .get_mut(&connection)
-                        .unwrap()
+                        .ok_or_else(|| AppError::forbidden("Audio session ended."))?
                         .sessions
                         .iter_mut()
                         .find(|s| s.id == actual)
@@ -360,10 +370,11 @@ impl WalkieGroupObject {
         }
         if op == "answer" {
             let session = data.get("session_id").and_then(Value::as_str).unwrap_or("");
-            if !room
+            let client = room
                 .clients
                 .get(id)
-                .unwrap()
+                .ok_or_else(|| AppError::forbidden("Audio session ended."))?;
+            if !client
                 .sessions
                 .iter()
                 .any(|s| s.id == session && !s.pending)

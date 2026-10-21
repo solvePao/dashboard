@@ -75,7 +75,7 @@ function handleStockViewMode(mode: "grid" | "detail"): void {
         :dot-variant="selectedPanel === 'stock' ? 'amber' : 'theme'"
       >
         <template #walkie>
-          <div class="relative flex h-full w-full flex-col justify-between overflow-hidden">
+          <div class="relative flex h-full min-h-0 w-full flex-col justify-between overflow-hidden">
             <WalkieTalkieWidget :config="walkieWidget.config" />
           </div>
         </template>
@@ -90,7 +90,7 @@ function handleStockViewMode(mode: "grid" | "detail"): void {
       <!-- Case 2: Only Walkie-talkie configured -->
       <div
         v-else-if="walkieWidget"
-        class="relative flex h-full w-full flex-col justify-between overflow-hidden"
+        class="relative flex h-full min-h-0 w-full flex-col justify-between overflow-hidden"
       >
         <WalkieTalkieWidget :config="walkieWidget.config" />
       </div>

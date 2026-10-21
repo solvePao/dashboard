@@ -89,6 +89,25 @@ pub fn normalize_widget_config(raw: Option<&serde_json::Value>) -> AppResult<ser
     }
 }
 
+/// Validates a walkie-talkie device code: exactly 6 ASCII digits.
+/// Mirrors `walkie::admission` code checks.
+pub fn validate_device_code(code: &str) -> AppResult<()> {
+    if code.len() != 6 || !code.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(AppError::bad_request("Enter a six-digit device code."));
+    }
+    Ok(())
+}
+
+/// Normalizes a walkie-talkie group name: trims and enforces 1–60 chars.
+/// Mirrors `walkie::api` group-name checks.
+pub fn normalize_group_name(raw: Option<&str>) -> AppResult<String> {
+    let name = raw.map(str::trim).unwrap_or("");
+    if name.is_empty() || name.chars().count() > 60 {
+        return Err(AppError::bad_request("Use a group name of 1–60 characters."));
+    }
+    Ok(name.to_string())
+}
+
 /// Validates a full PUT widgets body into normalized widgets. Missing
 /// body or duplicate keys are 400s; an empty list is valid and clears
 /// every widget (the web "None" choice).

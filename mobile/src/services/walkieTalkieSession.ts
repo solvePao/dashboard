@@ -33,7 +33,8 @@ export class WalkieTalkieSession {
   private ready = false;
   private enabled = false;
   private pendingPress = false;
-  private state: WalkieState = { status: "activation", message: "Enable audio on this phone to talk and listen.", groupName: "Walkie-talkie", peers: [], members: [], speaker: null, playbackBlocked: false };
+  private liveCall = false;
+  private state: WalkieState = { status: "activation", message: "Enable audio on this phone to talk and listen.", groupName: "Walkie-talkie", peers: [], members: [], speaker: null, playbackBlocked: false, inLiveCall: false };
 
   private readonly groupId: string;
   private readonly changed: (state: WalkieState) => void;
@@ -65,9 +66,7 @@ export class WalkieTalkieSession {
     const signal = this.controller.signal;
     this.update({ status: reconnecting ? "reconnecting" : "connecting", message: "Connecting audio…", playbackBlocked: false });
     try {
-      const availability = await this.api.availability(signal);
-      if (generation !== this.generation || signal.aborted) return;
-      this.update({ groupName: availability.group_name, message: "Allow microphone access in your browser to connect…" });
+      this.update({ message: "Allow microphone access in your browser to connect…" });
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("Microphone access requires HTTPS and a supported browser.");
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
       stream.getAudioTracks().forEach(track => { track.enabled = false; });
@@ -152,14 +151,29 @@ export class WalkieTalkieSession {
   private async gather(pc: RTCPeerConnection, signal: AbortSignal): Promise<void> {
     if (pc.iceGatheringState === "complete") return;
     await new Promise<void>((resolve, reject) => {
+      let debounceTimer: ReturnType<typeof setTimeout> | undefined;
       const finish = (error?: Error) => {
-        clearTimeout(timer); pc.removeEventListener("icegatheringstatechange", check); signal.removeEventListener("abort", abort);
+        clearTimeout(timer);
+        clearTimeout(debounceTimer);
+        pc.removeEventListener("icegatheringstatechange", check);
+        pc.removeEventListener("icecandidate", onCandidate);
+        signal.removeEventListener("abort", abort);
         if (error) reject(error); else resolve();
       };
       const check = () => { if (pc.iceGatheringState === "complete") finish(); };
+      const onCandidate = (event: RTCPeerConnectionIceEvent) => {
+        if (event.candidate) {
+          clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => finish(), 400);
+        } else {
+          finish();
+        }
+      };
       const abort = () => finish(new DOMException("Aborted", "AbortError"));
-      const timer = setTimeout(() => finish(new Error("Could not establish audio network candidates.")), 12_000);
-      pc.addEventListener("icegatheringstatechange", check); signal.addEventListener("abort", abort, { once: true });
+      const timer = setTimeout(() => finish(), 1500);
+      pc.addEventListener("icegatheringstatechange", check);
+      pc.addEventListener("icecandidate", onCandidate);
+      signal.addEventListener("abort", abort, { once: true });
       if (signal.aborted) abort();
     });
   }
@@ -186,7 +200,7 @@ export class WalkieTalkieSession {
     if (data.type === "snapshot") {
       this.snapshot = data as unknown as WalkieSnapshot;
       this.update({ groupName: this.snapshot.group_name || this.state.groupName, peers: this.snapshot.clients, members: this.snapshot.members, speaker: this.snapshot.speaker });
-      if (this.leaseId && this.snapshot.speaker?.connection_id !== this.connectionId) this.release();
+      if (this.leaseId && this.snapshot.speaker?.connection_id !== this.connectionId) this.release(true);
 
       if (this.calling && this.held) {
         const peers = (this.snapshot.clients || []).filter(c => c.connection_id !== this.connectionId);
@@ -213,17 +227,20 @@ export class WalkieTalkieSession {
     } else if (data.type === "renewed" && data.lease_id === this.leaseId) {
       this.armLease();
     } else if (data.type === "busy") {
-      this.release(); this.update({ status: "busy", message: "Channel busy. Release and press again when your friend finishes." });
+      this.liveCall = false;
+      this.release(true);
+      this.update({ status: "busy", message: "Channel busy. Release and press again when your friend finishes.", inLiveCall: false });
     } else if (data.type === "ended") {
+      this.liveCall = false;
       this.pause(false);
-      this.update({ status: "activation", message: typeof data.reason === "string" ? data.reason : "Session ended. Enable audio again." });
+      this.update({ status: "activation", message: typeof data.reason === "string" ? data.reason : "Session ended. Enable audio again.", inLiveCall: false });
     }
   }
 
   private armLease(): void {
     clearTimeout(this.leaseTimer);
     // Fail muted before the server's six-second lease expires if acknowledgements stop.
-    this.leaseTimer = setTimeout(() => { this.release(); this.update({ message: "Talk connection interrupted. Press again." }); }, 5000);
+    this.leaseTimer = setTimeout(() => { this.release(true); this.update({ message: "Talk connection interrupted. Press again." }); }, 5000);
   }
 
   press(): void {
@@ -250,7 +267,7 @@ export class WalkieTalkieSession {
       this.callTimer = setTimeout(() => {
         if (this.calling) {
           this.calling = false;
-          this.release();
+          this.release(true);
           this.update({ status: "ready", message: "No one is available right now." });
         }
       }, 8000);
@@ -259,7 +276,9 @@ export class WalkieTalkieSession {
     }
   }
 
-  release(): void {
+  release(force = false): void {
+    if (this.liveCall && !force) return;
+    this.liveCall = false;
     this.pendingPress = false;
     this.calling = false;
     clearTimeout(this.callTimer);
@@ -271,6 +290,25 @@ export class WalkieTalkieSession {
     this.refreshStatus();
   }
 
+  startLiveCall(): void {
+    if (this.liveCall && this.held) return;
+    this.liveCall = true;
+    this.press();
+  }
+
+  endLiveCall(): void {
+    this.liveCall = false;
+    this.release(true);
+  }
+
+  toggleLiveCall(): void {
+    if (this.liveCall) {
+      this.endLiveCall();
+    } else {
+      this.startLiveCall();
+    }
+  }
+
   private send(value: Record<string, unknown>): void {
     if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(value));
   }
@@ -278,15 +316,22 @@ export class WalkieTalkieSession {
   private refreshStatus(): void {
     if (!this.ready) return;
     if (this.calling) {
-      this.update({ status: "calling", message: "Calling group… waiting for peers to join" });
+      this.update({ status: "calling", message: "Calling group… waiting for peers to join", inLiveCall: this.liveCall });
       return;
     }
     const speaker = this.snapshot?.speaker;
-    if (this.leaseId) this.update({ status: "talking", message: "Talking live · release to listen" });
-    else if (speaker && speaker.connection_id !== this.connectionId) {
+    if (this.leaseId) {
+      this.update({
+        status: "talking",
+        message: this.liveCall ? "In live call · Tap End to hang up" : "Talking live · release to listen",
+        inLiveCall: this.liveCall,
+      });
+    } else if (speaker && speaker.connection_id !== this.connectionId) {
       const name = this.snapshot?.clients.find(peer => peer.connection_id === speaker.connection_id)?.name || "Your friend";
-      this.update({ status: "listening", message: `${name} is talking` });
-    } else this.update({ status: "ready", message: "Channel ready · hold to talk" });
+      this.update({ status: "listening", message: `${name} is talking`, inLiveCall: false });
+    } else {
+      this.update({ status: "ready", message: "Channel ready · hold to talk or tap Live", inLiveCall: false });
+    }
   }
 
   private hasPublication(target: string): boolean {
@@ -416,10 +461,11 @@ export class WalkieTalkieSession {
   }
 
   pause(showMessage = true): void {
+    this.liveCall = false;
     this.pendingPress = false;
     this.calling = false;
     clearTimeout(this.callTimer);
-    this.release();
+    this.release(true);
     this.enabled = false; this.ready = false; this.generation++;
     clearInterval(this.heartbeat); clearTimeout(this.reconnectTimer);
     clearTimeout(this.publisherDisconnectTimer); clearTimeout(this.stableTimer);
@@ -430,6 +476,6 @@ export class WalkieTalkieSession {
     this.microphone?.getTracks().forEach(track => { track.onended = null; track.stop(); }); this.microphone = undefined;
     this.receivers.forEach(receiver => this.closeReceiver(receiver)); this.receivers.clear();
     this.connectionId = ""; this.snapshot = undefined; this.queue = Promise.resolve();
-    this.update({ peers: [], speaker: null, playbackBlocked: false, ...(showMessage ? { status: "activation" as const, message: "Audio paused. Enable audio to listen and talk again." } : {}) });
+    this.update({ peers: [], speaker: null, playbackBlocked: false, inLiveCall: false, ...(showMessage ? { status: "activation" as const, message: "Audio paused. Enable audio to listen and talk again." } : {}) });
   }
 }

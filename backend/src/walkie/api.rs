@@ -21,14 +21,6 @@ pub async fn handle(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     }
 }
 
-fn name(body: &Value) -> AppResult<&str> {
-    body.get("name")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty() && s.chars().count() <= 60)
-        .ok_or_else(|| AppError::bad_request("Use a group name of 1–60 characters."))
-}
-
 async fn dispatch(mut req: Request, ctx: RouteContext<()>) -> AppResult<Response> {
     let db = ctx.env.d1("dashboard").map_err(db_error)?;
     let repo = WalkieRepository(&db);
@@ -287,7 +279,10 @@ async fn dispatch(mut req: Request, ctx: RouteContext<()>) -> AppResult<Response
             .json()
             .await
             .map_err(|_| AppError::bad_request("Invalid JSON body."))?;
-        let id = super::enrollment::create(&db, &ctx.env, uid, name(&body)?).await?;
+        let group_name = crate::services::validation::normalize_group_name(
+            body.get("name").and_then(Value::as_str),
+        )?;
+        let id = super::enrollment::create(&db, &ctx.env, uid, &group_name).await?;
         return mutation_response(json!({"group_id":id}), false);
     }
     if path.ends_with("/join") || path.ends_with("/invite") {
@@ -331,6 +326,12 @@ async fn dispatch(mut req: Request, ctx: RouteContext<()>) -> AppResult<Response
                 &[D1Type::Text(&group), D1Type::Text(&target.token)],
             )
             .await?;
+            repo.execute(
+                "DELETE FROM walkie_assignments WHERE group_id=? AND token=?",
+                &[D1Type::Text(&group), D1Type::Text(&target.token)],
+            )
+            .await?;
+            reconcile_device_after_group_removal(&repo, &target.token, Some(target.user_id)).await?;
             cleanup_pending = invalidate(&ctx.env, &group, json!({"token":target.token})).await?;
             super::repository::notify_device(&ctx.env, &target.token).await;
         } else if g.owner_id != uid {
@@ -343,29 +344,97 @@ async fn dispatch(mut req: Request, ctx: RouteContext<()>) -> AppResult<Response
                 .json()
                 .await
                 .map_err(|_| AppError::bad_request("Invalid JSON body."))?;
+            let group_name = crate::services::validation::normalize_group_name(
+                body.get("name").and_then(Value::as_str),
+            )?;
             repo.execute(
                 "UPDATE walkie_groups SET name=? WHERE id=?",
-                &[D1Type::Text(name(&body)?), D1Type::Text(&group)],
+                &[D1Type::Text(&group_name), D1Type::Text(&group)],
             )
             .await?;
             invalidate(&ctx.env, &group, json!({})).await?;
         } else if method == Method::Delete {
             let phones = assigned_phones(&repo, &group).await?;
             repo.execute(
+                "DELETE FROM walkie_device_members WHERE group_id=?",
+                &[D1Type::Text(&group)],
+            )
+            .await?;
+            repo.execute(
+                "DELETE FROM walkie_assignments WHERE group_id=?",
+                &[D1Type::Text(&group)],
+            )
+            .await?;
+            repo.execute(
                 "DELETE FROM walkie_groups WHERE id=?",
                 &[D1Type::Text(&group)],
             )
             .await?;
-            let result = invalidate(&ctx.env, &group, json!({"all":true})).await;
-            for token in phones {
-                super::repository::notify_device(&ctx.env, &token).await;
+            for token in &phones {
+                reconcile_device_after_group_removal(&repo, token, None).await?;
+                super::repository::notify_device(&ctx.env, token).await;
             }
+            let result = invalidate(&ctx.env, &group, json!({"all":true})).await;
             cleanup_pending = result?;
         }
     }
     Response::from_json(&json!({"ok":true,"cleanup_pending":cleanup_pending}))
         .map(|r| r.with_status(if cleanup_pending { 202 } else { 200 }))
         .map_err(db_error)
+}
+
+async fn reconcile_device_after_group_removal(
+    repo: &WalkieRepository<'_>,
+    token: &str,
+    user_id: Option<i64>,
+) -> AppResult<()> {
+    #[derive(Deserialize)]
+    struct RemainingGroup {
+        group_id: String,
+    }
+    let remaining = repo
+        .rows::<RemainingGroup>(
+            "SELECT group_id FROM walkie_device_members WHERE token=? LIMIT 1",
+            &[D1Type::Text(token)],
+        )
+        .await?;
+    if let Some(next_group) = remaining.into_iter().next() {
+        let config = json!({"group_id": next_group.group_id}).to_string();
+        if let Some(uid) = user_id {
+            repo.execute(
+                "INSERT INTO walkie_assignments(token,group_id,user_id) VALUES(?,?,?) ON CONFLICT(token) DO UPDATE SET group_id=excluded.group_id",
+                &[
+                    D1Type::Text(token),
+                    D1Type::Text(&next_group.group_id),
+                    crate::db::helper::user_id_param(uid).map_err(db_error)?,
+                ],
+            )
+            .await?;
+        } else {
+            repo.execute(
+                "UPDATE walkie_assignments SET group_id=? WHERE token=?",
+                &[D1Type::Text(&next_group.group_id), D1Type::Text(token)],
+            )
+            .await?;
+        }
+        repo.execute(
+            "UPDATE device_widgets SET enabled=1, config_json=? WHERE token=? AND widget_key='walkie_talkie'",
+            &[D1Type::Text(&config), D1Type::Text(token)],
+        )
+        .await?;
+    } else {
+        repo.execute(
+            "DELETE FROM walkie_assignments WHERE token=?",
+            &[D1Type::Text(token)],
+        )
+        .await?;
+        repo.execute(
+            "UPDATE device_widgets SET enabled=0, config_json='{}' WHERE token=? AND widget_key='walkie_talkie'",
+            &[D1Type::Text(token)],
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 async fn invalidate(env: &Env, group: &str, body: Value) -> AppResult<bool> {

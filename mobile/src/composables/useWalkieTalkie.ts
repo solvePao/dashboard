@@ -15,10 +15,10 @@ export function useWalkieTalkie(groupId: Ref<string | null>) {
   const switching = ref(false);
   const { refreshWidgets } = useWidgets();
   let session: WalkieTalkieSession | undefined;
-  let resumeTarget: string | null = null;
   let lifecycle = 0;
   let disposed = false;
   let refreshingSelection = false;
+  let lastReportedLostGroupId: string | null = null;
   const diagnostic = (event: string) => new WalkieTalkieApi().diagnostic(event, state.value.status);
   const observer = new WalkieTalkieActivity((nextGroups, nextActivity) => {
     groups.value = nextGroups; activity.value = nextActivity;
@@ -29,7 +29,12 @@ export function useWalkieTalkie(groupId: Ref<string | null>) {
     if (id !== groupId.value) return;
     state.value = { ...state.value, groupName: snapshot.group_name || state.value.groupName, members: snapshot.members };
   }, message => { activityError.value = message; }, joined => {
-    if (!groupId.value || joined.some(group => group.id === groupId.value) || refreshingSelection) return;
+    if (!groupId.value || joined.some(group => group.id === groupId.value) || refreshingSelection) {
+      lastReportedLostGroupId = null;
+      return;
+    }
+    if (lastReportedLostGroupId === groupId.value) return;
+    lastReportedLostGroupId = groupId.value;
     diagnostic("selection_lost"); pause();
     refreshingSelection = true;
     void refreshWidgets().finally(() => { refreshingSelection = false; });
@@ -46,15 +51,18 @@ export function useWalkieTalkie(groupId: Ref<string | null>) {
         members: next.members.length ? next.members : current?.members || [],
       };
     }) : undefined;
-    if (resumeTarget === id && !disposed && document.visibilityState === "visible") {
-      resumeTarget = null; void session?.enable();
+    if (id && !disposed && document.visibilityState === "visible") {
+      void session?.enable().catch(() => undefined);
     }
   }, { immediate: true });
   const release = () => session?.release();
-  const pause = () => { lifecycle++; resumeTarget = null; session?.pause(); };
+  const pause = () => { lifecycle++; session?.pause(); };
   const visibility = () => {
     if (document.visibilityState === "visible") {
       observer.start();
+      if (groupId.value && session && state.value.status === "activation") {
+        void session.enable().catch(() => undefined);
+      }
     }
   };
   const pagehide = () => { diagnostic("pagehide"); pause(); observer.stop(); };
@@ -67,13 +75,11 @@ export function useWalkieTalkie(groupId: Ref<string | null>) {
     try {
       const result = await new WalkieTalkieApi().activate(id);
       if (operation !== lifecycle || disposed || document.visibilityState !== "visible") return;
-      resumeTarget = wasEnabled ? id : null;
-      // Push can arrive before this request completes. Handle either ordering.
-      if (groupId.value === id) { resumeTarget = null; if (wasEnabled) void session?.enable(); }
+      if (groupId.value === id && wasEnabled) { void session?.enable(); }
       await refreshWidgets();
-      if (operation !== lifecycle || disposed || document.visibilityState !== "visible") { resumeTarget = null; return; }
+      if (operation !== lifecycle || disposed || document.visibilityState !== "visible") return;
       if (result.cleanup_pending) activityError.value = "Group switched. Previous audio cleanup is retrying.";
-    } catch (error) { resumeTarget = null; if (operation !== lifecycle || disposed) return; activityError.value = error instanceof Error ? error.message : "Could not switch groups."; }
+    } catch (error) { if (operation !== lifecycle || disposed) return; activityError.value = error instanceof Error ? error.message : "Could not switch groups."; }
     finally { switching.value = false; }
   }
 
@@ -86,18 +92,34 @@ export function useWalkieTalkie(groupId: Ref<string | null>) {
           void session?.enable();
         }
       }
+    } else if (event.status === "widgets_updated") {
+      void observer.sync();
     }
   });
 
-  window.addEventListener("blur", release);
   window.addEventListener("pagehide", pagehide);
   document.addEventListener("visibilitychange", visibility);
   if (document.visibilityState === "visible") observer.start();
   onBeforeUnmount(() => {
     diagnostic("unmount"); disposed = true; pause(); observer.stop();
     unsubscribeDeviceSocket();
-    window.removeEventListener("blur", release); window.removeEventListener("pagehide", pagehide); document.removeEventListener("visibilitychange", visibility);
+    window.removeEventListener("pagehide", pagehide); document.removeEventListener("visibilitychange", visibility);
   });
-  return { state, groups, activityError, switching, otherActivity: computed(() => activity.value.filter(item => item.groupId !== groupId.value)), switchGroup,
-    enable: (autoPress = false) => { diagnostic("enable"); return session?.enable(autoPress); }, pause: () => { diagnostic("pause"); pause(); }, press: () => session?.press(), release, resumePlayback: () => session?.resumePlayback() };
+  return {
+    state,
+    groups,
+    activityError,
+    switching,
+    otherActivity: computed(() => activity.value.filter(item => item.groupId !== groupId.value)),
+    inLiveCall: computed(() => state.value.inLiveCall || false),
+    switchGroup,
+    enable: (autoPress = false) => { diagnostic("enable"); return session?.enable(autoPress); },
+    pause: () => { diagnostic("pause"); pause(); },
+    press: () => session?.press(),
+    release,
+    startLiveCall: () => session?.startLiveCall(),
+    endLiveCall: () => session?.endLiveCall(),
+    toggleLiveCall: () => session?.toggleLiveCall(),
+    resumePlayback: () => session?.resumePlayback()
+  };
 }

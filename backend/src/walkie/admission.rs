@@ -1,6 +1,6 @@
 //! Device-generated codes are consent to admission, never device credentials.
 use super::{repository::WalkieRepository, *};
-use crate::db::helper::user_id_param;
+use crate::db::queries;
 use serde_json::{json, Value};
 
 #[derive(Serialize, Deserialize)]
@@ -14,13 +14,6 @@ struct CodeRecord {
     expires_at: u64,
     consumed_at: Option<u64>,
     redeemed_group: Option<String>,
-}
-
-fn valid_code(code: &str) -> AppResult<()> {
-    if code.len() != 6 || !code.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(AppError::bad_request("Enter a six-digit device code."));
-    }
-    Ok(())
 }
 
 async fn authorized_phone(repo: &WalkieRepository<'_>, token: &str) -> AppResult<i64> {
@@ -112,7 +105,7 @@ async fn target(
     code: &str,
 ) -> AppResult<(CodeRecord, Member)> {
     repo.owner(group, uid).await?;
-    valid_code(code)?;
+    crate::services::validation::validate_device_code(code)?;
     let record=repo.rows::<CodeRecord>("SELECT token,expires_at,consumed_at,redeemed_group FROM walkie_device_codes WHERE code=?", &[D1Type::Text(code)]).await?.into_iter().next()
         .ok_or_else(||AppError::not_found("Device code is invalid, expired, or cancelled."))?;
     if record.expires_at <= now() {
@@ -140,22 +133,6 @@ pub async fn preview(db: &D1Database, uid: i64, group: &str, code: &str) -> AppR
     )
 }
 
-fn args<'a>(
-    group: &'a str,
-    uid: i64,
-    code: &'a str,
-    device: &'a str,
-    time: f64,
-) -> AppResult<Vec<D1Type<'a>>> {
-    Ok(vec![
-        D1Type::Text(group),
-        user_id_param(uid).map_err(db_error)?,
-        D1Type::Text(code),
-        D1Type::Text(device),
-        D1Type::Real(time),
-    ])
-}
-
 pub async fn admit(
     db: &D1Database,
     env: &Env,
@@ -176,33 +153,29 @@ pub async fn admit(
     let time = now() as f64;
     // Recheck every authority inside the transaction, including the enabled widget and
     // unexpired device credential. Consumed receipts are valid only for surviving membership.
-    let eligible="SELECT c.token,c.consumed_at,t.user_id FROM walkie_device_codes c JOIN walkie_devices d ON d.token=c.token JOIN device_tokens t ON t.token=c.token JOIN device_widgets w ON w.token=c.token AND w.widget_key='walkie_talkie' AND w.enabled=1 JOIN walkie_groups g ON g.id=? AND g.owner_id=? WHERE c.code=? AND d.device_id=? AND c.expires_at>? AND t.expires_at>strftime('%Y-%m-%dT%H:%M:%fZ','now') AND (c.consumed_at IS NULL OR (c.redeemed_group=g.id AND EXISTS(SELECT 1 FROM walkie_device_members m WHERE m.group_id=g.id AND m.token=c.token)))";
-    let insert=format!("INSERT INTO walkie_device_members(group_id,token) SELECT ?,e.token FROM ({eligible}) e WHERE e.consumed_at IS NULL ON CONFLICT(group_id,token) DO NOTHING");
+    // Statement text and bind order come from the tested `db::queries` builders.
     let mut insert_args = vec![D1Type::Text(group)];
-    insert_args.extend(args(group, uid, code, device_id, time)?);
-    let activate=format!("INSERT INTO walkie_assignments(token,group_id,user_id) SELECT e.token,?,e.user_id FROM ({eligible}) e WHERE e.consumed_at IS NULL AND NOT EXISTS(SELECT 1 FROM walkie_assignments a WHERE a.token=e.token) AND (SELECT count(*) FROM walkie_device_members m WHERE m.token=e.token)=1");
+    insert_args.extend(queries::walkie_admit_args(group, uid, code, device_id, time)?);
     let mut active_args = vec![D1Type::Text(group)];
-    active_args.extend(args(group, uid, code, device_id, time)?);
-    let widget=format!("UPDATE device_widgets SET config_json=json_object('group_id',?) WHERE widget_key='walkie_talkie' AND token IN(SELECT e.token FROM ({eligible}) e WHERE e.consumed_at IS NULL AND EXISTS(SELECT 1 FROM walkie_assignments a WHERE a.token=e.token AND a.group_id=?))");
+    active_args.extend(queries::walkie_admit_args(group, uid, code, device_id, time)?);
     let mut widget_args = vec![D1Type::Text(group)];
-    widget_args.extend(args(group, uid, code, device_id, time)?);
+    widget_args.extend(queries::walkie_admit_args(group, uid, code, device_id, time)?);
     widget_args.push(D1Type::Text(group));
-    let consume=format!("UPDATE walkie_device_codes SET consumed_at=COALESCE(consumed_at,?),redeemed_group=? WHERE token IN(SELECT e.token FROM ({eligible}) e WHERE EXISTS(SELECT 1 FROM walkie_device_members m WHERE m.token=e.token AND m.group_id=?)) RETURNING token");
     let mut consume_args = vec![D1Type::Real(time), D1Type::Text(group)];
-    consume_args.extend(args(group, uid, code, device_id, time)?);
+    consume_args.extend(queries::walkie_admit_args(group, uid, code, device_id, time)?);
     consume_args.push(D1Type::Text(group));
     let results = db
         .batch(vec![
-            db.prepare(insert)
+            db.prepare(queries::walkie_admit_insert_sql())
                 .bind_refs(&insert_args)
                 .map_err(db_error)?,
-            db.prepare(activate)
+            db.prepare(queries::walkie_admit_activate_sql())
                 .bind_refs(&active_args)
                 .map_err(db_error)?,
-            db.prepare(widget)
+            db.prepare(queries::walkie_admit_widget_sql())
                 .bind_refs(&widget_args)
                 .map_err(db_error)?,
-            db.prepare(consume)
+            db.prepare(queries::walkie_admit_consume_sql())
                 .bind_refs(&consume_args)
                 .map_err(db_error)?,
         ])

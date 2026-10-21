@@ -10,7 +10,8 @@ export class WalkieTalkieActivity {
   private connections = new Map<string, Connection>();
   private activity = new Map<string, GroupActivity>();
   private groups: WalkieGroupSummary[] = [];
-  private timer?: ReturnType<typeof setInterval>;
+  private cleanupTimer?: ReturnType<typeof setInterval>;
+  private fallbackTimer?: ReturnType<typeof setInterval>;
   private controller = new AbortController();
   private generation = 0;
   private syncing = false;
@@ -29,16 +30,26 @@ export class WalkieTalkieActivity {
     this.stop();
     this.controller = new AbortController();
     void this.sync();
-    this.timer = setInterval(() => {
-      for (const [id, activity] of this.activity) if (activity.expiresAt <= Date.now()) this.activity.delete(id);
-      this.emit();
-      void this.sync();
-    }, 5000);
+    this.cleanupTimer = setInterval(() => {
+      let changed = false;
+      for (const [id, activity] of this.activity) {
+        if (activity.expiresAt <= Date.now()) {
+          this.activity.delete(id);
+          changed = true;
+        }
+      }
+      if (changed) this.emit();
+    }, 1000);
+    this.fallbackTimer = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void this.sync();
+      }
+    }, 60_000);
   }
 
   private emit(): void { this.changed(this.groups, [...this.activity.values()]); }
 
-  private async sync(): Promise<void> {
+  async sync(): Promise<void> {
     if (this.syncing || this.controller.signal.aborted) return;
     this.syncing = true;
     const generation = this.generation;
@@ -116,7 +127,7 @@ export class WalkieTalkieActivity {
 
   stop(): void {
     this.generation++; this.syncing = false;
-    clearInterval(this.timer); this.controller.abort();
+    clearInterval(this.cleanupTimer); clearInterval(this.fallbackTimer); this.controller.abort();
     this.connections.forEach(connection => this.close(connection)); this.connections.clear();
     this.activity.clear(); this.groups = []; this.emit();
   }

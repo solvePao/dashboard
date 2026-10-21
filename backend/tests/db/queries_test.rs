@@ -1,5 +1,6 @@
 use backend::db::queries::*;
 use backend::common::{SESSION_EXPIRY_SQL, SQL_NOW, TOKEN_EXPIRY_SQL, USER_COLUMNS};
+use worker::D1Type;
 
 #[test]
 fn user_sql_builders() {
@@ -181,4 +182,164 @@ fn widget_sql_runs_end_to_end() {
     let remaining: i64 =
         conn.query_row("SELECT COUNT(*) FROM device_widgets", [], |r| r.get(0)).unwrap();
     assert_eq!(remaining, 0);
+}
+
+#[test]
+fn walkie_admit_sql_builders_share_authority_subquery() {
+    let eligible = walkie_admit_eligible_sql();
+    assert!(eligible.contains("FROM walkie_device_codes"));
+    assert!(eligible.contains("g.owner_id=?"));
+    assert!(eligible.contains("w.widget_key='walkie_talkie'"));
+    // Every statement rechecks the same authority subquery.
+    for stmt in [
+        walkie_admit_insert_sql(),
+        walkie_admit_activate_sql(),
+        walkie_admit_widget_sql(),
+        walkie_admit_consume_sql(),
+    ] {
+        assert!(stmt.contains(&eligible), "missing authority check in {stmt}");
+    }
+    assert!(walkie_admit_insert_sql().contains("ON CONFLICT(group_id,token) DO NOTHING"));
+    assert!(walkie_admit_activate_sql().contains("INTO walkie_assignments"));
+    assert!(walkie_admit_widget_sql().contains("json_object('group_id',?)"));
+    assert!(walkie_admit_consume_sql().contains("RETURNING token"));
+}
+
+#[test]
+fn walkie_admit_args_bind_authority_in_order() {
+    let args = walkie_admit_args("g1", 7, "482913", "d9", 1.5).unwrap();
+    assert_eq!(args.len(), 5);
+    assert!(matches!(args[0], D1Type::Text("g1")));
+    assert!(matches!(args[1], D1Type::Integer(7)));
+    assert!(matches!(args[2], D1Type::Text("482913")));
+    assert!(matches!(args[3], D1Type::Text("d9")));
+    assert!(matches!(args[4], D1Type::Real(t) if t == 1.5));
+    // User ids outside the D1 integer range fail closed.
+    let err = walkie_admit_args("g1", i64::from(i32::MAX) + 1, "482913", "d9", 1.5).unwrap_err();
+    assert_eq!(err.status, 500);
+}
+
+fn walkie_db() -> rusqlite::Connection {
+    let conn = memory_db();
+    conn.execute_batch(include_str!("../../migrations/0002_walkie_talkie.sql"))
+        .unwrap();
+    conn.execute_batch(include_str!("../../migrations/0003_walkie_device_memberships.sql"))
+        .unwrap();
+    conn.execute_batch(include_str!("../../migrations/0004_walkie_owner_admission.sql"))
+        .unwrap();
+    conn
+}
+
+fn bind_all(args: &[D1Type]) -> Vec<rusqlite::types::Value> {
+    args.iter()
+        .map(|v| match v {
+            D1Type::Null => rusqlite::types::Value::Null,
+            D1Type::Real(x) => rusqlite::types::Value::Real(*x),
+            D1Type::Integer(n) => rusqlite::types::Value::Integer(i64::from(*n)),
+            D1Type::Text(s) => rusqlite::types::Value::Text(s.to_string()),
+            D1Type::Boolean(b) => rusqlite::types::Value::Integer(i64::from(*b)),
+            D1Type::Blob(bytes) => rusqlite::types::Value::Blob(bytes.to_vec()),
+        })
+        .collect()
+}
+
+#[test]
+fn walkie_admit_statements_run_end_to_end() {
+    // The production admit transaction (members, assignment, widget
+    // config, code consumption) executes against real SQLite with the
+    // production builder SQL and bind order.
+    let conn = walkie_db();
+    conn.execute(
+        "INSERT INTO users (google_sub, email) VALUES ('w-1', 'w@x.com')",
+        [],
+    )
+    .unwrap();
+    let user_id: i64 =
+        conn.query_row("SELECT id FROM users WHERE google_sub = 'w-1'", [], |r| r.get(0)).unwrap();
+    conn.execute(
+        "INSERT INTO device_tokens (token, user_id, device_name, expires_at, created_at, last_used_at) VALUES ('wtok-1', ?1, 'Phone', '2099-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+        rusqlite::params![user_id],
+    )
+    .unwrap();
+    conn.execute("INSERT INTO walkie_devices(token) VALUES('wtok-1')", []).unwrap();
+    let device_id: String = conn
+        .query_row("SELECT device_id FROM walkie_devices WHERE token = 'wtok-1'", [], |r| r.get(0))
+        .unwrap();
+    conn.execute(
+        "INSERT INTO device_widgets(token,widget_key,enabled,config_json) VALUES('wtok-1','walkie_talkie',1,'{}')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO walkie_groups(id,name,owner_id,created_at) VALUES('g1','Hike',?1,1700000000000)",
+        rusqlite::params![user_id],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO walkie_device_codes(token,code,expires_at) VALUES('wtok-1','482913',9999999999999)",
+        [],
+    )
+    .unwrap();
+
+    fn exec(conn: &rusqlite::Connection, sql: &str, binds: Vec<D1Type>) -> usize {
+        let owned = bind_all(&binds);
+        conn.execute(sql, rusqlite::params_from_iter(owned.iter())).unwrap()
+    }
+
+    let time = 1700000000000.0;
+    // Same head/args/tail assembly as production `admit()`.
+    let mut insert_binds = vec![D1Type::Text("g1")];
+    insert_binds.extend(walkie_admit_args("g1", user_id, "482913", &device_id, time).unwrap());
+    let mut active_binds = vec![D1Type::Text("g1")];
+    active_binds.extend(walkie_admit_args("g1", user_id, "482913", &device_id, time).unwrap());
+    let mut widget_binds = vec![D1Type::Text("g1")];
+    widget_binds.extend(walkie_admit_args("g1", user_id, "482913", &device_id, time).unwrap());
+    widget_binds.push(D1Type::Text("g1"));
+    let mut consume_binds = vec![D1Type::Real(time), D1Type::Text("g1")];
+    consume_binds.extend(walkie_admit_args("g1", user_id, "482913", &device_id, time).unwrap());
+    consume_binds.push(D1Type::Text("g1"));
+
+    // Members, assignment, widget config, then code consumption.
+    assert_eq!(exec(&conn, &walkie_admit_insert_sql(), insert_binds), 1);
+    assert_eq!(exec(&conn, &walkie_admit_activate_sql(), active_binds), 1);
+    assert_eq!(exec(&conn, &walkie_admit_widget_sql(), widget_binds), 1);
+
+    let owned = bind_all(&consume_binds);
+    let token: String = conn
+        .query_row(
+            &walkie_admit_consume_sql(),
+            rusqlite::params_from_iter(owned.iter()),
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(token, "wtok-1");
+
+    let members: i64 = conn
+        .query_row("SELECT COUNT(*) FROM walkie_device_members WHERE group_id = 'g1'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(members, 1);
+    let assigned: String = conn
+        .query_row("SELECT group_id FROM walkie_assignments WHERE token = 'wtok-1'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(assigned, "g1");
+    let config: String = conn
+        .query_row(
+            "SELECT config_json FROM device_widgets WHERE token = 'wtok-1' AND widget_key = 'walkie_talkie'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(config, r#"{"group_id":"g1"}"#);
+    let consumed: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM walkie_device_codes WHERE token = 'wtok-1' AND consumed_at IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(consumed, 1);
 }
