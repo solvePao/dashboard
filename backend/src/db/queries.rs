@@ -91,6 +91,20 @@ pub fn device_token_owner_sql() -> String {
     format!("SELECT user_id FROM device_tokens WHERE token = ?1 AND expires_at > {SQL_NOW} LIMIT 1")
 }
 
+pub fn get_device_token_by_user_sql() -> String {
+    format!(
+        "SELECT token, user_id, device_name, created_at, expires_at, last_used_at \
+         FROM device_tokens WHERE user_id = ?1 AND token = ?2 AND expires_at > {SQL_NOW} LIMIT 1"
+    )
+}
+
+pub fn renew_device_token_sql() -> String {
+    format!(
+        "UPDATE device_tokens SET expires_at = {TOKEN_EXPIRY_SQL}, last_used_at = {SQL_NOW} \
+         WHERE token = ?1 AND user_id = ?2"
+    )
+}
+
 pub fn get_device_widgets_sql() -> String {
     "SELECT widget_key, enabled, config_json, updated_at FROM device_widgets \
      WHERE token = ?1 ORDER BY widget_key ASC"

@@ -96,21 +96,21 @@ onBeforeUnmount(() => {
 <template>
   <AppDialog :open="open" title="Add mobile device" @close="handleClose">
     <!-- Header -->
-    <div class="fe-addmodal-header flex items-center justify-between border-b border-border/80 pb-4">
-      <div class="fe-addmodal-header-left flex items-center gap-2.5">
-        <span class="fe-addmodal-header-icon flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+    <div class="fe-addmodal-header flex items-center justify-between border-b border-border/80 pb-3 sm:pb-4">
+      <div class="fe-addmodal-header-left flex min-w-0 items-center gap-2.5 pr-2">
+        <span class="fe-addmodal-header-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
           <Smartphone class="fe-addmodal-header-glyph h-5 w-5" />
         </span>
-        <div class="fe-addmodal-header-text">
-          <h2 id="add-device-title" class="fe-addmodal-title text-base font-semibold leading-tight text-foreground">
+        <div class="fe-addmodal-header-text min-w-0">
+          <h2 id="add-device-title" class="fe-addmodal-title text-base font-semibold leading-tight text-foreground truncate">
             Add Mobile Device
           </h2>
-          <p class="fe-addmodal-subtitle text-xs text-muted-foreground mt-0.5">Link your mobile frontend with your account</p>
+          <p class="fe-addmodal-subtitle text-xs text-muted-foreground mt-0.5 truncate">Link your mobile frontend with your account</p>
         </div>
       </div>
       <button
         type="button"
-        class="fe-addmodal-close-btn rounded-lg p-1.5 text-muted-foreground transition hover:bg-accent hover:text-foreground"
+        class="fe-addmodal-close-btn flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-accent hover:text-foreground"
         aria-label="Close"
         @click="handleClose"
       >
@@ -119,10 +119,10 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- Tab Switcher -->
-    <div class="fe-addmodal-tabs mt-4 flex rounded-lg bg-muted p-1 text-xs">
+    <div class="fe-addmodal-tabs mt-3 sm:mt-4 flex rounded-lg bg-muted p-1 text-xs">
       <button
         type="button"
-        class="fe-addmodal-tab-code flex flex-1 items-center justify-center gap-1.5 rounded-md py-1.5 font-medium transition"
+        class="fe-addmodal-tab-code flex flex-1 min-h-[40px] items-center justify-center gap-1.5 rounded-md py-2 font-medium transition"
         :class="activeTab === 'code' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
         @click="activeTab = 'code'"
       >
@@ -131,7 +131,7 @@ onBeforeUnmount(() => {
       </button>
       <button
         type="button"
-        class="fe-addmodal-tab-camera flex flex-1 items-center justify-center gap-1.5 rounded-md py-1.5 font-medium transition"
+        class="fe-addmodal-tab-camera flex flex-1 min-h-[40px] items-center justify-center gap-1.5 rounded-md py-2 font-medium transition"
         :class="activeTab === 'camera' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
         @click="activeTab = 'camera'"
       >
@@ -155,20 +155,49 @@ onBeforeUnmount(() => {
       <span class="fe-addmodal-result-text">{{ resultMessage.text }}</span>
     </div>
 
-    <!-- Tab 1: 6-Character Code -->
-    <DeviceCodeForm
-      v-if="activeTab === 'code'"
-      ref="codeFormRef"
-      :loading="loading"
-      @submit="({ code, deviceName }) => submitAuthorization(code, deviceName)"
-    />
+    <Transition name="fe-tab-fade" mode="out-in">
+      <!-- Tab 1: 6-Character Code -->
+      <DeviceCodeForm
+        v-if="activeTab === 'code'"
+        key="code"
+        ref="codeFormRef"
+        :loading="loading"
+        @submit="({ code, deviceName }) => submitAuthorization(code, deviceName)"
+      />
 
-    <!-- Tab 2: Camera Scanner -->
-    <DeviceCameraScanner
-      v-else
-      ref="scannerRef"
-      :active="open && activeTab === 'camera'"
-      @scan="(code) => submitAuthorization(code, 'Mobile Device (QR)')"
-    />
+      <!-- Tab 2: Camera Scanner -->
+      <DeviceCameraScanner
+        v-else
+        key="camera"
+        ref="scannerRef"
+        :active="open && activeTab === 'camera'"
+        @scan="(code) => submitAuthorization(code, 'Mobile Device (QR)')"
+      />
+    </Transition>
   </AppDialog>
 </template>
+
+<style scoped>
+/* Tab switch: same tokens as mobile stock-symbol-flip (opacity + 6px rise) */
+.fe-tab-fade-enter-active,
+.fe-tab-fade-leave-active {
+  transition: opacity 0.16s ease-out,
+    transform 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.fe-tab-fade-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.fe-tab-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fe-tab-fade-enter-active,
+  .fe-tab-fade-leave-active {
+    transition: opacity 0.2s ease !important;
+    transform: none !important;
+  }
+}
+</style>

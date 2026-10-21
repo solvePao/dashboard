@@ -164,12 +164,12 @@ const digitalString = computed(() => {
 </script>
 
 <template>
-  <div class="mo-analog-clock-root flex h-full w-full flex-col items-center justify-between select-none py-1">
+  <div class="mo-analog-clock-root flex h-full w-full flex-col items-center justify-center select-none p-1 my-auto overflow-hidden">
     <!-- SVG Clock Dial -->
-    <div class="relative flex flex-1 items-center justify-center min-h-0 w-full py-1">
+    <div class="relative flex flex-1 items-center justify-center min-h-0 w-full py-0.5">
       <svg
         viewBox="0 0 200 200"
-        class="h-full max-h-[195px] sm:max-h-[210px] aspect-square drop-shadow-sm select-none"
+        class="h-full max-h-[min(185px,calc(100%-2rem))] aspect-square drop-shadow-sm select-none mx-auto"
       >
         <!-- Bezel & Background Face -->
         <circle
@@ -299,7 +299,7 @@ const digitalString = computed(() => {
     </div>
 
     <!-- Bottom Controls & Time Readout -->
-    <div class="flex items-center justify-between w-full px-2 pt-1 border-t border-border/30 text-xs">
+    <div class="flex items-center justify-between w-full max-w-xs px-2 pt-1 border-t border-border/30 text-xs shrink-0">
       <div class="flex items-center gap-1.5 font-mono font-semibold text-foreground">
         <span>{{ digitalString }}</span>
       </div>

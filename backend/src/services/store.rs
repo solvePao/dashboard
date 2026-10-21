@@ -47,6 +47,8 @@ pub trait PairingStore {
     async fn store_delete_device_token(&self, device_token: &str) -> AppResult<()>;
     async fn store_get_user_devices(&self, user_id: i64) -> AppResult<Vec<DeviceToken>>;
     async fn store_revoke_device_token(&self, user_id: i64, token: &str) -> AppResult<bool>;
+    async fn store_get_device_token(&self, user_id: i64, token: &str) -> AppResult<Option<DeviceToken>>;
+    async fn store_renew_device_token(&self, user_id: i64, token: &str) -> AppResult<bool>;
 }
 
 /// Push side of revocation: tells a live device its token just died.
@@ -57,6 +59,8 @@ pub trait DeviceNotifier {
     /// Tells a live device its widget set changed. Unlike revocation the
     /// socket stays open; the device re-fetches and re-renders.
     async fn notify_widgets_updated(&self, device_token: &str);
+    /// Tells a live device to wake and activate walkie-talkie for a group.
+    async fn notify_walkie_activate(&self, _device_token: &str, _group_id: &str) {}
 }
 
 /// Used when the notifier binding is unavailable: revocation still commits.
@@ -65,6 +69,7 @@ pub struct NoNotify;
 impl DeviceNotifier for NoNotify {
     async fn notify_revoked(&self, _device_token: &str) {}
     async fn notify_widgets_updated(&self, _device_token: &str) {}
+    async fn notify_walkie_activate(&self, _device_token: &str, _group_id: &str) {}
 }
 
 /// D1 side of per-device widgets: config rows only. Widget semantics
@@ -195,6 +200,18 @@ impl PairingStore for D1Stores<'_> {
         db::revoke_device_token(self.0, user_id, token)
             .await
             .map_err(|_| AppError::bad_gateway("Failed to revoke device."))
+    }
+
+    async fn store_get_device_token(&self, user_id: i64, token: &str) -> AppResult<Option<DeviceToken>> {
+        db::get_device_token(self.0, user_id, token)
+            .await
+            .map_err(|_| AppError::bad_gateway("Failed to fetch device."))
+    }
+
+    async fn store_renew_device_token(&self, user_id: i64, token: &str) -> AppResult<bool> {
+        db::renew_device_token(self.0, user_id, token)
+            .await
+            .map_err(|_| AppError::bad_gateway("Failed to renew device token."))
     }
 }
 

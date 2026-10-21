@@ -34,6 +34,7 @@ const {
   devicesError,
   fetchDevices: fetchDevicesAction,
   authorizeDevice: authorizeDeviceAction,
+  reauthorizeDevice: reauthorizeDeviceAction,
   revokeDevice: revokeDeviceAction,
   clearDevices,
 } = useDevices();
@@ -171,6 +172,24 @@ export function useAuth() {
     }
   }
 
+  async function reauthorizeDevice(
+    deviceToken: string,
+    codeOrSessionId: string
+  ): Promise<AuthorizeDeviceResult> {
+    const token = requireValidToken();
+    if (!token) {
+      return { success: false, message: authError.value || "Please sign in to re-pair devices." };
+    }
+    try {
+      return await reauthorizeDeviceAction(token, deviceToken, codeOrSessionId);
+    } catch (err) {
+      if (handleUnauthorized(err)) {
+        return { success: false, message: "Session expired. Please sign in again." };
+      }
+      throw err;
+    }
+  }
+
   async function revokeDevice(deviceToken: string): Promise<boolean> {
     const token = requireValidToken();
     if (!token) return false;
@@ -196,6 +215,7 @@ export function useAuth() {
     signOut,
     fetchDevices,
     authorizeDevice,
+    reauthorizeDevice,
     revokeDevice,
   };
 }

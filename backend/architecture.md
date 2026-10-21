@@ -187,6 +187,13 @@ flowchart TD
 7. Mobile receives the push (or the replay on reconnect / fallback check), stores `device_token`, and authenticates subsequent requests via `Authorization: Bearer <device_token>`.
 8. At 2 minutes the alarm expires a still-pending object (pushes `expired`, wipes on completion); the D1 index row expires on the same clock.
 
+### Device Re-Pairing
+1. When a previously paired mobile device needs to reconnect without losing its setup, the user clicks "Re-pair" next to the device on the web dashboard.
+2. The user inputs the pairing code shown on the mobile screen (or scans its QR code).
+3. The web dashboard issues `POST /api/devices/:token/reauthorize` with `{ "code": "..." }` and the user's session JWT.
+4. The backend validates device ownership, commits the existing device token into the mobile's pending `PairingObject`, and extends `expires_at` in D1 by 6 months.
+5. The mobile receives the existing token, reconnects to `GET /api/devices/ws/:token`, and calls `GET /api/devices/me/widgets` to immediately restore its full widget configuration and walkie memberships.
+
 ### Real-Time Device Revocation
 1. Authorized mobile device opens `GET /api/devices/ws/:token` to connect a hibernatable WebSocket to its dedicated `DeviceObject` (`idFromName(device_token)`).
 2. When the user clicks "Revoke" on the web dashboard, the web app sends `DELETE /api/devices/:token` with their session JWT.

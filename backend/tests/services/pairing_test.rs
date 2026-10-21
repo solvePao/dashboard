@@ -17,7 +17,25 @@ fn commit_status_mapping() {
 async fn no_notify_implements_notifiers_without_panic() {
     let no_notify = NoNotify;
     no_notify.notify_revoked("tok-123").await;
+    no_notify.notify_widgets_updated("tok-123").await;
+    no_notify.notify_walkie_activate("tok-123", "group-1").await;
     no_notify.notify_hub(42, DeviceLifecycleKind::Authorized, None).await;
     no_notify.notify_hub(42, DeviceLifecycleKind::Revoked, Some("tok-123")).await;
     no_notify.notify_hub(42, DeviceLifecycleKind::Disconnected, Some("tok-123")).await;
+}
+
+/// Covers the `DeviceNotifier::notify_walkie_activate` default body via a
+/// double that does not override it.
+#[tokio::test]
+async fn device_notifier_default_walkie_activate_is_noop() {
+    struct MinimalNotifier;
+
+    impl DeviceNotifier for MinimalNotifier {
+        async fn notify_revoked(&self, _device_token: &str) {}
+        async fn notify_widgets_updated(&self, _device_token: &str) {}
+    }
+
+    MinimalNotifier
+        .notify_walkie_activate("tok-123", "group-1")
+        .await;
 }

@@ -32,6 +32,20 @@ export async function authorizeDeviceApi(
   });
 }
 
+export async function reauthorizeDeviceApi(
+  token: string,
+  deviceToken: string,
+  code: string,
+): Promise<AuthorizeDeviceResponse> {
+  return apiClient<AuthorizeDeviceResponse>(`/api/devices/${encodeURIComponent(deviceToken)}/reauthorize`, {
+    method: "POST",
+    headers: authHeader(token),
+    body: JSON.stringify({
+      code: code.trim(),
+    }),
+  });
+}
+
 export async function revokeDeviceApi(
   token: string,
   deviceToken: string

@@ -84,6 +84,12 @@ export async function apiClient<T>(
     if (err instanceof ApiError) {
       throw err;
     }
+    const isAborted =
+      Boolean(options.signal?.aborted) ||
+      (err instanceof Error && (err.name === "AbortError" || err.message.toLowerCase().includes("aborted")));
+    if (isAborted) {
+      throw new ApiError("Request aborted", 0);
+    }
     const message = err instanceof Error ? err.message : "Network error occurred";
     logger.error("api", `Failed request to ${path}`, message);
     throw new ApiError(message, 0);

@@ -25,6 +25,7 @@ bindings = [
   { name = "PAIRING_OBJECT", class_name = "PairingObject" },
   { name = "DEVICE_OBJECT", class_name = "DeviceObject" },
   { name = "DEVICES_HUB", class_name = "DevicesHubObject" },
+  { name = "WALKIE_GROUP", class_name = "WalkieGroupObject" },
 ]
 
 [[migrations]]
@@ -38,6 +39,10 @@ new_sqlite_classes = ["DeviceObject"]
 [[migrations]]
 tag = "v3"
 new_sqlite_classes = ["DevicesHubObject"]
+
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["WalkieGroupObject"]
 
 # Production bindings must be declared explicitly: environments do not inherit them.
 [env.production]
@@ -66,8 +71,11 @@ bindings = [
   { name = "PAIRING_OBJECT", class_name = "PairingObject" },
   { name = "DEVICE_OBJECT", class_name = "DeviceObject" },
   { name = "DEVICES_HUB", class_name = "DevicesHubObject" },
+  { name = "WALKIE_GROUP", class_name = "WalkieGroupObject" },
 ]
 
 [env.production.vars]
 ENVIRONMENT = "production"
 FRONTEND_ORIGINS = "https://homehub.solvepao.com,https://nest.solvepao.com"
+WALKIE_SFU_APP_ID = "774c931c1853103a255484ccb0c9ee48"
+WALKIE_TURN_KEY_ID = "91d1cc4024aa3635617909f27c625ba5"

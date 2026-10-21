@@ -12,6 +12,7 @@ const {
   disconnectError,
   isAuthenticated,
   checkAuth,
+  createSession,
   requestDisconnect,
   cancelDisconnect,
   disconnect,
@@ -39,6 +40,8 @@ const {
         v-else
         :auth-state="authState"
         :status-message="statusMessage"
+        @refresh="createSession"
+        @check="checkAuth"
       />
     </div>
 

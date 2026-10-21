@@ -46,7 +46,7 @@ function labelFor(pref: ThemePreference): string {
         <DropdownMenuItem
           v-for="option in options"
           :key="option.value"
-          class="fe-theme-menu-item flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
+          class="fe-theme-menu-item flex min-h-[40px] cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-foreground outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
           @select="setPreference(option.value)"
         >
           <component :is="option.icon" class="fe-theme-menu-item-icon h-4 w-4 text-muted-foreground" aria-hidden="true" />

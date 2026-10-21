@@ -6,6 +6,16 @@ GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 # Production: wrangler secret put JWT_SECRET --env production
 JWT_SECRET=change-me-to-a-long-random-secret
 
+# Walkie-talkie: create a separate Cloudflare Realtime SFU app per environment.
+# Add WALKIE_SFU_APP_ID under [vars] in your local Wrangler config or here.
+# Keep the application secret server-side. Production: wrangler secret put
+# WALKIE_SFU_APP_SECRET --env production (run from backend/).
+# WALKIE_SFU_APP_ID=your-development-sfu-app-id
+# WALKIE_SFU_APP_SECRET=your-development-sfu-app-secret
+# Optional TURN fallback for restricted networks; credentials issued for one hour.
+# WALKIE_TURN_KEY_ID=your-development-turn-key-id
+# WALKIE_TURN_API_TOKEN=your-development-turn-api-token
+
 # Comma-separated origins allowed to call the API. Defaults to the local
 # Vite dev servers (ports 5173/5174) when unset.
 # FRONTEND_ORIGINS=http://localhost:5173,https://your-frontend.example.com

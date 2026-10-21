@@ -1,3 +1,7 @@
+#[cfg(not(any(test, coverage)))]
+pub mod walkie;
+#[cfg(not(any(test, coverage)))]
+pub use walkie::room::WalkieGroupObject;
 pub mod common;
 pub mod db;
 pub mod models;
@@ -69,6 +73,9 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .delete_async("/api/devices/:token", |req, ctx| async move {
             routes::device::revoke_device(req, ctx).await
         })
+        .post_async("/api/devices/:token/reauthorize", |req, ctx| async move {
+            routes::device::reauthorize_device(req, ctx).await
+        })
         .get_async("/api/devices/:token/widgets", |req, ctx| async move {
             routes::device::get_device_widgets(req, ctx).await
         })
@@ -78,6 +85,28 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/api/device-widgets", |req, ctx| async move {
             routes::device::get_own_widgets(req, ctx).await
         })
+        .get_async("/api/walkie-talkie/groups", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .post_async("/api/walkie-talkie/groups", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .post_async("/api/walkie-talkie/join", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .patch_async("/api/walkie-talkie/groups/:group", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .delete_async("/api/walkie-talkie/groups/:group", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .post_async("/api/walkie-talkie/groups/:group/invite", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .delete_async("/api/walkie-talkie/groups/:group/invite", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .delete_async("/api/walkie-talkie/groups/:group/members/:member", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .get_async("/api/walkie-talkie/device-code", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .post_async("/api/walkie-talkie/device-code", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .delete_async("/api/walkie-talkie/device-code", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .post_async("/api/walkie-talkie/groups/:group/device-preview", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .post_async("/api/walkie-talkie/groups/:group/devices", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .post_async("/api/walkie-talkie/active", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .post_async("/api/walkie-talkie/activity", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .post_async("/api/walkie-talkie/memberships", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .post_async("/api/walkie-talkie/availability", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .post_async("/api/walkie-talkie/diagnostics", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .post_async("/api/walkie-talkie/connect", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .post_async("/api/walkie-talkie/media", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .post_async("/api/walkie-talkie/wake", |req, ctx| async move { walkie::api::handle(req, ctx).await })
+        .get_async("/api/walkie-talkie/socket/:group", |req, ctx| async move { walkie::api::handle(req, ctx).await })
         .run(req, env)
         .await?;
 

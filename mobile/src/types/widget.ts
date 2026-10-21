@@ -97,13 +97,17 @@ export function asWeatherConfig(widget: DeviceWidget | undefined): WeatherWidget
 
 export interface StockSymbolItem {
   symbol: string;
+  ticker?: string;
   name?: string;
   exchange?: string;
   currency?: string;
 }
 
+export type StockPeriod = "1D" | "5D" | "1W" | "1M" | "3M" | "6M" | "YTD" | "1Y";
+
 export interface StockWidgetConfig {
   symbols: StockSymbolItem[];
+  period?: StockPeriod;
   symbol?: string;
   name?: string;
 }
@@ -121,9 +125,10 @@ export function asStockConfig(widget: DeviceWidget | undefined): StockWidgetConf
         if (typeof s.symbol === "string" && s.symbol.trim() !== "") {
           validSymbols.push({
             symbol: s.symbol.trim().toUpperCase(),
+            ticker: typeof s.ticker === "string" ? s.ticker.trim().toUpperCase() : undefined,
             name: typeof s.name === "string" ? s.name : undefined,
-            exchange: typeof s.exchange === "string" ? s.exchange : undefined,
-            currency: typeof s.currency === "string" ? s.currency : undefined,
+            exchange: typeof s.exchange === "string" ? s.exchange.trim().toUpperCase() : undefined,
+            currency: typeof s.currency === "string" ? s.currency.trim().toUpperCase() : undefined,
           });
         }
       }
@@ -142,8 +147,19 @@ export function asStockConfig(widget: DeviceWidget | undefined): StockWidgetConf
 
   if (validSymbols.length === 0) return null;
 
+  const rawPeriod = typeof raw.period === "string"
+    ? raw.period.trim().toUpperCase()
+    : typeof raw.default_period === "string"
+    ? raw.default_period.trim().toUpperCase()
+    : undefined;
+  const validPeriods: StockPeriod[] = ["1D", "5D", "1W", "1M", "3M", "6M", "YTD", "1Y"];
+  const period = rawPeriod && validPeriods.includes(rawPeriod as StockPeriod)
+    ? (rawPeriod as StockPeriod)
+    : undefined;
+
   return {
     symbols: validSymbols,
+    period,
     symbol: validSymbols[0].symbol,
     name: validSymbols[0].name,
   };

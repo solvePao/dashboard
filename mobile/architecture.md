@@ -54,10 +54,11 @@ mobile/
     ├── components/                # Modular UI presentation components
     │   ├── HorizontalSplitLayout.vue # Dual-panel responsive container with configurable split ratio
     │   ├── VerticalSlidePager.vue # Smooth vertical slide pager with touch, wheel & morphing dots
-    │   ├── DeviceLeftPanel.vue    # Left panel coordinating Weather widget & DeviceLinkedSummary
-    │   ├── DevicePairingSteps.vue # Step 1-4 pairing guide with feedback message banner
-    │   ├── DeviceLinkedSummary.vue# Active connection summary and 6-month validity badge
-    │   ├── DeviceAuthCard.vue     # Right panel coordinating Stock widget, Clock view & pairing
+    │   ├── DeviceLeftPanel.vue    # Left panel coordinating Weather widget, Clock view & unauthorized pairing instructions
+    │   ├── DevicePairingSteps.vue # 3-step actionable pairing guide with real-time auto-pairing notice and feedback banner
+    │   ├── DeviceLinkedSummary.vue# Active connection summary and 6-month validity badge (housed in settings modal)
+    │   ├── DeviceSettingsModal.vue# Floating settings modal (fullscreen, theme, linked device summary, disconnect, user profile banner)
+    │   ├── DeviceAuthCard.vue     # Right panel coordinating Walkie-talkie & Stock widgets via VerticalSlidePager (up/down swipe)
     │   ├── DevicePairingView.vue  # SVG QR code display, 6-char code badge, and copy button
     │   ├── DeviceAuthorizedMinimalView.vue # Multi-mode Clock & synchronization view (Digital, Analog, Calendar)
     │   ├── DeviceAuthorizedView.vue# Authorized profile avatar, name, email, and connection badges
@@ -68,7 +69,9 @@ mobile/
     │   ├── widgets/
     │   │   ├── WeatherWidget.vue  # Full weather display with multi-city horizontal swipe animation, live condition mapping, and interactive FX preview
     │   │   ├── WeatherEffects.vue # GPU-accelerated atmospheric visual shaders (sunlight, day/night rain, cloud, sandstorm, snow, chilly night)
-    │   │   └── StockWidget.vue    # Full stock display with live quotes, multi-period performance dropdown (1D to 1Y from API), day range, metrics grid
+    │   │   ├── StockWidget.vue    # Full stock display with live quotes, frontend-configured performance period, clean grid (no topbar), icon-only back button, day range, metrics grid
+    │   │   ├── WalkieTalkieWidget.vue # Compact zero-scroll PTT widget fitting 100% on mobile phone screens
+    │   │   └── WalkiePTTButton.vue    # Compact ~96px touch PTT button with concentric animated ripples
     │   └── ThemeToggle.vue        # Dropdown / button toggling light, dark, or system mode
     │
     ├── styles/                    # Decoupled stylesheets
@@ -172,7 +175,8 @@ flowchart TD
 
 5. **`src/components/` (UI Presentation Layer)**
    - **`HorizontalSplitLayout.vue`**: Configurable dual-pane layout maintaining responsive width ratios and safe-area padding.
-   - **`DeviceInstructionsCard.vue`**: Left pane showing `DeviceLinkedSummary` if authorized, or `DevicePairingSteps` if unlinked, with a Check for Auth button.
+   - **`DeviceLeftPanel.vue`**: Left pane presenting Weather widget & Clock view if authorized, or a 3-step actionable pairing guide (`DevicePairingSteps`) with live status pill, fullscreen toggle, and real-time auto-pairing indicators if unlinked.
+   - **`DeviceInstructionsCard.vue`**: Legacy left pane showing `DeviceLinkedSummary` if authorized, or `DevicePairingSteps` if unlinked.
    - **`DeviceAuthCard.vue`**: Right pane displaying `DeviceAuthorizedView` if linked, or `DevicePairingView` showing the QR code (backend SVG rendered through `<img>` so embedded scripts cannot execute), the canonical 6-char pairing code, and a live countdown from `expires_at`. The expired overlay takes precedence over the QR image; error/idle states get their own retry/placeholder blocks.
 
 6. **`src/styles/` (Modular Styling)**
@@ -239,6 +243,13 @@ sequenceDiagram
 4. Mobile clears `dashboard.mobile.device_token` from `localStorage`, sets `user` to `null`, and resets `authState` to `"idle"`.
 5. Mobile automatically calls `createSession()` to initiate a fresh pairing handshake (rendering a new QR code and shortcode).
 6. The UI displays the notification banner: `"Device access was revoked from the web dashboard. Scan QR code to reconnect."`
+
+### 5. Widget Layout & Streamlining Refinements
+- **Minimal Clock Header**: Minimal mode header shows only a subtle pulsating green status dot (`h-2 w-2 rounded-full bg-emerald-500 animate-pulse`), omitting verbose "Connected / Welcome" text which is moved to the Settings dialog.
+- **Clock Widget Footer**: The bottom synchronized / mode label bar is removed to allocate full vertical space to clock dials and calendars.
+- **Clock Sizing & Centering**: Analog Clock, Digital Clock (using fluid `clamp()` typography), and Month Calendar are centered vertically and horizontally, avoiding overflow on small viewports.
+- **Weather Widget Hero**: High, Low, and Feels Like are stacked right-aligned with enlarged font and pill badges for clear readability.
+- **Stock Widget Terminal Cleanup**: Removed legacy `BBG` / `MATRIX` tags and bottom command bars; simplified interval dropdown labels to concise forms (`1D`, `5D`, `1M`, etc.); replaced live text near the status indicator with a clean pulsing green dot.
 
 ---
 

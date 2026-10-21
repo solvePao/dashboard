@@ -95,18 +95,18 @@ onBeforeUnmount(() => {
 
 <template>
   <AppDialog :open="open" title="Choose a city" @close="emit('close')">
-    <div class="fe-citymodal-header flex items-center justify-between border-b border-border/80 pb-4">
-      <div class="fe-citymodal-header-text">
+    <div class="fe-citymodal-header flex items-center justify-between border-b border-border/80 pb-3 sm:pb-4">
+      <div class="fe-citymodal-header-text min-w-0 pr-2">
         <h2 id="city-picker-title" class="fe-citymodal-title text-base font-semibold leading-tight text-foreground">
           Choose a city
         </h2>
-        <p class="fe-citymodal-subtitle text-xs text-muted-foreground mt-0.5">
+        <p class="fe-citymodal-subtitle text-xs text-muted-foreground mt-0.5 truncate">
           Search for the city to show weather for
         </p>
       </div>
       <button
         type="button"
-        class="fe-citymodal-close-btn rounded-lg p-1.5 text-muted-foreground transition hover:bg-accent hover:text-foreground"
+        class="fe-citymodal-close-btn flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-accent hover:text-foreground"
         aria-label="Close"
         @click="emit('close')"
       >
@@ -114,39 +114,39 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <div class="fe-citymodal-search relative mt-4">
-      <Search class="fe-citymodal-search-icon pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+    <div class="fe-citymodal-search relative mt-3 sm:mt-4">
+      <Search class="fe-citymodal-search-icon pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
       <input
         ref="inputRef"
         v-model="query"
         type="text"
         placeholder="Type at least 2 letters, e.g. Berlin"
         autocomplete="off"
-        class="fe-citymodal-input w-full rounded-lg border border-input bg-background py-2 pl-9 pr-9 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        class="fe-citymodal-input w-full min-h-[44px] rounded-lg border border-input bg-background py-2.5 pl-10 pr-10 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
       <Loader2
         v-if="searching"
-        class="fe-citymodal-searching-icon absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-primary"
+        class="fe-citymodal-searching-icon absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-primary"
       />
     </div>
 
     <div
       v-if="searchError"
-      class="fe-citymodal-error mt-3 rounded-xl border border-destructive/20 bg-destructive/10 p-3 text-xs text-destructive"
+      class="fe-citymodal-error mt-3 rounded-xl border border-destructive/20 bg-destructive/10 p-3 text-xs text-destructive animate-in fade-in-0 duration-150"
       role="alert"
     >
       {{ searchError }}
     </div>
 
-    <ul v-else-if="results.length > 0" class="fe-citymodal-results mt-3 max-h-64 space-y-1 overflow-y-auto">
+    <ul v-else-if="results.length > 0" class="fe-citymodal-results mt-3 max-h-60 sm:max-h-64 space-y-1 overflow-y-auto animate-in fade-in-0 duration-150">
       <li v-for="city in results" :key="`${city.latitude},${city.longitude}`">
         <button
           type="button"
-          class="fe-citymodal-result-btn flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition hover:bg-accent"
+          class="fe-citymodal-result-btn flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition hover:bg-accent active:scale-[0.99]"
           @click="handleSelect(city)"
         >
           <MapPin class="fe-citymodal-result-icon h-4 w-4 shrink-0 text-primary" />
-          <span class="fe-citymodal-result-text min-w-0">
+          <span class="fe-citymodal-result-text min-w-0 flex-1">
             <span class="block truncate text-sm font-medium text-foreground">{{ city.name }}</span>
             <span v-if="city.country" class="block truncate text-xs text-muted-foreground">
               {{ [city.admin1, city.country].filter(Boolean).join(", ") }}
@@ -158,7 +158,7 @@ onBeforeUnmount(() => {
 
     <p
       v-else-if="query.trim().length >= 2 && !searching"
-      class="fe-citymodal-empty mt-3 rounded-xl bg-muted p-3 text-center text-xs text-muted-foreground"
+      class="fe-citymodal-empty mt-3 rounded-xl bg-muted p-3 text-center text-xs text-muted-foreground animate-in fade-in-0 duration-150"
     >
       No cities found. Try another spelling.
     </p>

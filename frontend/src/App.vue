@@ -5,6 +5,7 @@ import TopNavbar from "./components/TopNavbar.vue";
 import ConnectedDevicesList from "./components/ConnectedDevicesList.vue";
 import DeviceManageView from "./components/DeviceManageView.vue";
 import AddDeviceModal from "./components/AddDeviceModal.vue";
+import RepairDeviceModal from "./components/RepairDeviceModal.vue";
 import UserProfileCard from "./components/UserProfileCard.vue";
 import WelcomePage from "./components/WelcomePage.vue";
 import { useAuth } from "./composables/useAuth";
@@ -16,9 +17,14 @@ const { devices } = useDevices();
 
 const showAddDeviceModal = ref(false);
 const managedDevice = ref<DeviceItem | null>(null);
+const repairingDevice = ref<DeviceItem | null>(null);
 
 function handleManage(device: DeviceItem): void {
   managedDevice.value = device;
+}
+
+function handleRepair(device: DeviceItem): void {
+  repairingDevice.value = device;
 }
 
 function handleManageBack(): void {
@@ -32,6 +38,7 @@ function handleDeviceRevoked(): void {
 watch(isLoggedIn, (loggedIn) => {
   if (!loggedIn) {
     managedDevice.value = null;
+    repairingDevice.value = null;
     showAddDeviceModal.value = false;
   }
 });
@@ -50,7 +57,7 @@ watch(devices, (list) => {
 <template>
   <TopNavbar />
   <main
-    class="fe-app-main mx-auto w-full max-w-[var(--container-max)] space-y-6 px-4 pt-6 pb-10 sm:px-6"
+    class="fe-app-main mx-auto w-full max-w-[var(--container-max)] space-y-5 px-3.5 pt-4 pb-28 sm:space-y-6 sm:px-6 sm:pt-6 sm:pb-10 pb-safe overflow-x-hidden min-h-[calc(100dvh-var(--topbar-h))]"
   >
     <!-- When managing a device, replace everything with the manage view -->
     <template v-if="isLoggedIn && user && managedDevice">
@@ -66,6 +73,7 @@ watch(devices, (list) => {
       <ConnectedDevicesList
         @add-device="showAddDeviceModal = true"
         @manage="handleManage"
+        @repair="handleRepair"
       />
     </template>
 
@@ -76,4 +84,9 @@ watch(devices, (list) => {
   <AppFooter v-if="!managedDevice" />
 
   <AddDeviceModal :open="showAddDeviceModal" @close="showAddDeviceModal = false" />
+  <RepairDeviceModal
+    :device="repairingDevice"
+    :open="!!repairingDevice"
+    @close="repairingDevice = null"
+  />
 </template>

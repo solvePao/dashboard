@@ -47,7 +47,13 @@ export function deriveShortCode(id: string): string {
 /// Observer hook for live device-socket pushes the auth flow itself
 /// does not consume (e.g. `widgets_updated`). Widget sync subscribes
 /// here instead of opening a second socket.
-export type DeviceSocketListener = (event: { status?: string; message?: string }) => void;
+export type DeviceSocketEvent = {
+  status?: string;
+  message?: string;
+  group_id?: string;
+};
+
+export type DeviceSocketListener = (event: DeviceSocketEvent) => void;
 
 const deviceSocketListeners = new Set<DeviceSocketListener>();
 
@@ -58,7 +64,7 @@ export function subscribeDeviceSocket(listener: DeviceSocketListener): () => voi
   };
 }
 
-function notifyDeviceSocketListeners(event: { status?: string; message?: string }): void {
+function notifyDeviceSocketListeners(event: DeviceSocketEvent): void {
   for (const listener of deviceSocketListeners) {
     try {
       listener(event);
@@ -117,7 +123,7 @@ export function useDeviceAuth() {
     };
     ws.onmessage = async (event) => {
       try {
-        const body = JSON.parse(String(event.data)) as { status?: string; message?: string };
+        const body = JSON.parse(String(event.data)) as DeviceSocketEvent;
         if (body.status === "revoked") {
           logger.warn("auth", "Device revoked by web dashboard");
           closeDeviceSocket();
@@ -126,8 +132,8 @@ export function useDeviceAuth() {
           await createSession();
           statusMessage.value =
             "Device access was revoked from the web dashboard. Scan QR code to reconnect.";
-        } else if (body.status === "widgets_updated") {
-          // The socket stays open; widget sync re-fetches and re-renders.
+        } else if (body.status === "widgets_updated" || body.status === "walkie_activate") {
+          // Notify listeners (widgets refresh, walkie incoming call auto-activates)
           notifyDeviceSocketListeners(body);
         }
       } catch {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, watch } from "vue";
-import { Loader2, LogOut, Maximize, Minimize, Moon, Settings, ShieldCheck, X } from "@lucide/vue";
+import { Loader2, LogOut, Maximize, Minimize, Moon, Settings, X } from "@lucide/vue";
+import DeviceLinkedSummary from "./DeviceLinkedSummary.vue";
 import { useDeviceAuth } from "../composables/useDeviceAuth";
 
 const props = defineProps<{
@@ -81,7 +82,7 @@ onBeforeUnmount(() => {
             <Settings class="h-4 w-4" />
           </span>
           <h2 id="settings-dialog-title" class="text-sm font-semibold text-foreground">
-            Settings & Account
+            Settings & Device
           </h2>
         </div>
         <button
@@ -95,6 +96,27 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="mo-settings-content min-h-0 overflow-y-auto overscroll-contain space-y-4 pt-4">
+        <!-- User Profile & Welcome Banner -->
+        <div v-if="user" class="rounded-xl border border-border/70 bg-primary/5 p-3.5 flex items-center gap-3">
+          <img
+            v-if="user.picture_url"
+            :src="user.picture_url"
+            :alt="user.name || 'User avatar'"
+            class="h-10 w-10 rounded-full border border-primary/20 object-cover shrink-0"
+          />
+          <div v-else class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary font-bold text-sm">
+            {{ (user.name || "U").charAt(0).toUpperCase() }}
+          </div>
+          <div class="min-w-0 flex-1 text-xs">
+            <p class="font-semibold text-foreground text-sm truncate">
+              {{ user.name ? `Welcome, ${user.name}` : "Welcome" }}
+            </p>
+            <p v-if="user.email" class="text-muted-foreground text-[11px] truncate">
+              {{ user.email }}
+            </p>
+          </div>
+        </div>
+
         <div class="rounded-xl border border-border/70 bg-muted/20 p-3.5">
           <button
             type="button"
@@ -123,8 +145,8 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <!-- Disconnect Action -->
-        <div class="rounded-xl border border-border/70 bg-muted/20 p-3.5">
+        <!-- Device Linked Status & Disconnect Action -->
+        <div class="rounded-xl border border-border/70 bg-muted/20 p-3.5 space-y-3">
           <div class="flex items-center justify-between text-xs">
             <div>
               <p class="font-medium text-foreground">Device Connection</p>
@@ -132,7 +154,9 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <div class="mt-3">
+          <DeviceLinkedSummary />
+
+          <div class="pt-1 border-t border-border/60">
             <button
               v-if="!isConfirmingDisconnect"
               type="button"
@@ -166,45 +190,6 @@ onBeforeUnmount(() => {
                   Cancel
                 </button>
               </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- User Profile (Below) -->
-        <div v-if="user" class="border-t border-border/80 pt-3">
-          <p class="text-[11px] font-medium uppercase tracking-wider text-muted-foreground mb-2">
-            Authorized User
-          </p>
-          <div class="flex items-center gap-3 rounded-xl border border-border/70 bg-muted/20 p-3">
-            <div class="relative shrink-0">
-              <img
-                v-if="user.picture_url"
-                :src="user.picture_url"
-                alt=""
-                referrerpolicy="no-referrer"
-                class="h-10 w-10 rounded-full border-2 border-primary/20 object-cover"
-              />
-              <div
-                v-else
-                class="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary"
-              >
-                {{ (user.name || user.email || "?").charAt(0).toUpperCase() }}
-              </div>
-              <span
-                class="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-white shadow-xs"
-                title="Authorized"
-              >
-                <ShieldCheck class="h-2.5 w-2.5" />
-              </span>
-            </div>
-
-            <div class="min-w-0 flex-1">
-              <p class="truncate text-xs font-semibold text-foreground">
-                {{ user.name || "Authorized User" }}
-              </p>
-              <p class="truncate text-[11px] text-muted-foreground">
-                {{ user.email }}
-              </p>
             </div>
           </div>
         </div>

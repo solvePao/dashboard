@@ -4,6 +4,7 @@ import { ApiError } from "../api/client";
 import {
   fetchDevicesApi,
   authorizeDeviceApi,
+  reauthorizeDeviceApi,
   revokeDeviceApi,
   devicesHubUrl,
 } from "../api/deviceApi";
@@ -189,6 +190,31 @@ export function useDevices() {
     }
   }
 
+  async function reauthorizeDevice(
+    token: string | null,
+    deviceToken: string,
+    codeOrSessionId: string
+  ): Promise<AuthorizeDeviceResult> {
+    if (!token) {
+      return { success: false, message: "Please sign in to re-pair devices." };
+    }
+    try {
+      const res = await reauthorizeDeviceApi(token, deviceToken, codeOrSessionId);
+      if (res.error) {
+        return { success: false, message: res.error };
+      }
+      await fetchDevices(token);
+      return {
+        success: true,
+        message: res.message || "Device re-paired successfully!",
+      };
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) throw err;
+      const msg = err instanceof Error ? err.message : "Network error";
+      return { success: false, message: msg };
+    }
+  }
+
   async function revokeDevice(
     token: string | null,
     deviceToken: string
@@ -223,6 +249,7 @@ export function useDevices() {
     devicesError,
     fetchDevices,
     authorizeDevice,
+    reauthorizeDevice,
     revokeDevice,
     clearDevices,
     closeHub,

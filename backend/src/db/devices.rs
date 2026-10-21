@@ -79,6 +79,29 @@ pub async fn get_user_devices(db: &D1Database, user_id: i64) -> Result<Vec<Devic
     result.results::<DeviceToken>()
 }
 
+pub async fn get_device_token(
+    db: &D1Database,
+    user_id: i64,
+    token: &str,
+) -> Result<Option<DeviceToken>> {
+    let stmt = db.prepare(queries::get_device_token_by_user_sql());
+    let args = [user_id_param(user_id)?, D1Type::Text(token)];
+    let stmt = stmt.bind_refs(&args)?;
+    stmt.first::<DeviceToken>(None).await
+}
+
+pub async fn renew_device_token(
+    db: &D1Database,
+    user_id: i64,
+    token: &str,
+) -> Result<bool> {
+    let stmt = db.prepare(queries::renew_device_token_sql());
+    let args = [D1Type::Text(token), user_id_param(user_id)?];
+    let res = stmt.bind_refs(&args)?.run().await?;
+    let changed = res.meta()?.and_then(|m| m.changes).unwrap_or(0);
+    Ok(changed > 0)
+}
+
 pub async fn revoke_device_token(db: &D1Database, user_id: i64, token: &str) -> Result<bool> {
     let stmt = db.prepare(
         "DELETE FROM device_tokens WHERE user_id = ?1 AND token = ?2"

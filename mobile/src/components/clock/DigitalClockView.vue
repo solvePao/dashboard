@@ -83,45 +83,45 @@ const totalDaysInYear = computed(() => {
 </script>
 
 <template>
-  <div class="mo-digital-clock-root flex h-full w-full flex-col items-center justify-center text-center select-none py-2">
+  <div class="mo-digital-clock-root flex h-full w-full flex-col items-center justify-center text-center select-none p-2 my-auto">
     <!-- Center Time Display -->
     <div
-      class="group relative inline-flex items-baseline justify-center cursor-pointer transition-transform duration-200 active:scale-95"
+      class="group relative inline-flex items-baseline justify-center cursor-pointer transition-transform duration-200 active:scale-95 max-w-full"
       title="Click to toggle 12h / 24h format"
       @click="toggle24Hour"
     >
-      <div class="flex items-baseline font-mono font-extrabold tracking-tight text-foreground text-5xl sm:text-6xl md:text-7xl">
+      <div class="flex items-baseline font-mono font-extrabold tracking-tight text-foreground text-[clamp(1.75rem,8.5vw,4.5rem)] leading-none">
         <span>{{ hours }}</span>
         <span class="animate-pulse text-primary mx-0.5 opacity-80">:</span>
         <span>{{ minutes }}</span>
         <span class="animate-pulse text-primary mx-0.5 opacity-80">:</span>
-        <span class="text-3xl sm:text-4xl md:text-5xl text-foreground/80 font-semibold">{{ seconds }}</span>
+        <span class="text-[clamp(1.2rem,5.5vw,3rem)] text-foreground/80 font-semibold leading-none">{{ seconds }}</span>
       </div>
 
       <!-- AM / PM Indicator in 12h Mode -->
       <span
         v-if="!is24Hour"
-        class="ml-2.5 self-start rounded-md border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[11px] font-bold text-primary tracking-wider"
+        class="ml-1.5 sm:ml-2.5 self-start rounded-md border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[clamp(0.6rem,1.8vw,0.7rem)] font-bold text-primary tracking-wider"
       >
         {{ ampm }}
       </span>
       <span
         v-else
-        class="ml-2.5 self-start rounded-md border border-border/60 bg-muted/50 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground tracking-wider"
+        class="ml-1.5 sm:ml-2.5 self-start rounded-md border border-border/60 bg-muted/50 px-1.5 py-0.5 text-[clamp(0.55rem,1.8vw,0.65rem)] font-semibold text-muted-foreground tracking-wider"
       >
         24H
       </span>
     </div>
 
     <!-- Date Badge -->
-    <div class="mt-3.5 flex items-center gap-2 rounded-full border border-border/70 bg-card/80 px-3.5 py-1.5 text-xs font-medium text-foreground shadow-xs backdrop-blur-xs">
-      <CalendarDays class="h-3.5 w-3.5 text-primary" />
-      <span>{{ fullDateString }}</span>
+    <div class="mt-3 flex items-center gap-1.5 sm:gap-2 rounded-full border border-border/70 bg-card/80 px-3 py-1 sm:px-3.5 sm:py-1.5 text-[11px] sm:text-xs font-medium text-foreground shadow-xs backdrop-blur-xs max-w-full truncate">
+      <CalendarDays class="h-3 w-3 sm:h-3.5 sm:w-3.5 text-primary shrink-0" />
+      <span class="truncate">{{ fullDateString }}</span>
     </div>
 
     <!-- Sub-info: Day of Year Progress -->
-    <div class="mt-2.5 flex items-center gap-1.5 text-[11px] text-muted-foreground/90">
-      <Sparkles class="h-3 w-3 text-amber-500/80" />
+    <div class="mt-2 flex items-center gap-1.5 text-[10px] sm:text-[11px] text-muted-foreground/90">
+      <Sparkles class="h-2.5 w-2.5 sm:h-3 sm:w-3 text-amber-500/80 shrink-0" />
       <span>Day {{ dayOfYear }} of {{ totalDaysInYear }}</span>
     </div>
   </div>

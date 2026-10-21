@@ -4,7 +4,7 @@ import { ApiError } from "../api/client";
 import { fetchWidgetsApi, saveWidgetsApi } from "../api/widgetApi";
 import { subscribeHubEvents } from "./useDevices";
 import { useAuth } from "./useAuth";
-import type { DeviceWidget, StockSymbolItem, WeatherCityItem, WeatherWidgetConfig } from "../types/widget";
+import type { DeviceWidget, StockPeriod, StockSymbolItem, WeatherCityItem, WeatherWidgetConfig } from "../types/widget";
 import { asStockConfig, asWeatherConfig } from "../types/widget";
 
 /**
@@ -19,6 +19,7 @@ export function useDeviceWidgets(deviceToken: string) {
   const widgets = ref<DeviceWidget[]>([]);
   const widgetsLoading = ref(false);
   const widgetsError = ref<string | null>(null);
+  const widgetsNotice = ref<string | null>(null);
   const saving = ref(false);
 
   async function load(): Promise<void> {
@@ -27,7 +28,8 @@ export function useDeviceWidgets(deviceToken: string) {
       widgetsError.value = "Please sign in to manage widgets.";
       return;
     }
-    widgetsLoading.value = true;
+    // Keep mounted widget settings and their confirmation state during background refreshes.
+    widgetsLoading.value = widgets.value.length === 0;
     widgetsError.value = null;
     try {
       widgets.value = await fetchWidgetsApi(token, deviceToken);
@@ -41,6 +43,7 @@ export function useDeviceWidgets(deviceToken: string) {
   }
 
   async function persist(next: DeviceWidget[]): Promise<boolean> {
+    if (saving.value) return false;
     const token = authToken.value;
     if (!token) {
       widgetsError.value = "Please sign in to manage widgets.";
@@ -49,7 +52,9 @@ export function useDeviceWidgets(deviceToken: string) {
     saving.value = true;
     widgetsError.value = null;
     try {
-      widgets.value = await saveWidgetsApi(token, deviceToken, next);
+      const result = await saveWidgetsApi(token, deviceToken, next);
+      widgets.value = result.widgets;
+      widgetsNotice.value = result.cleanup_pending ? "Widget saved. Previous audio connections are still being closed; the server is retrying." : null;
       return true;
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) throw err;
@@ -135,7 +140,15 @@ export function useDeviceWidgets(deviceToken: string) {
     const currentSymbols = parsed ? [...parsed.symbols] : [];
 
     const symUpper = symbolItem.symbol.trim().toUpperCase();
-    const duplicate = currentSymbols.some((s) => s.symbol.toUpperCase() === symUpper);
+    const tickerUpper = symbolItem.ticker?.trim().toUpperCase();
+    const exchangeUpper = symbolItem.exchange?.trim().toUpperCase();
+
+    const uniqueId = tickerUpper || (exchangeUpper ? `${exchangeUpper}:${symUpper}` : symUpper);
+
+    const duplicate = currentSymbols.some((s) => {
+      const sId = s.ticker || (s.exchange ? `${s.exchange}:${s.symbol}` : s.symbol);
+      return sId.toUpperCase() === uniqueId.toUpperCase();
+    });
     if (!duplicate) {
       if (currentSymbols.length >= 4) {
         widgetsError.value = "Maximum 4 stock symbols allowed per device.";
@@ -144,6 +157,9 @@ export function useDeviceWidgets(deviceToken: string) {
       currentSymbols.push({
         ...symbolItem,
         symbol: symUpper,
+        ticker: tickerUpper || (exchangeUpper ? `${exchangeUpper}:${symUpper}` : undefined),
+        exchange: exchangeUpper,
+        currency: symbolItem.currency?.trim().toUpperCase(),
       });
     }
 
@@ -151,7 +167,10 @@ export function useDeviceWidgets(deviceToken: string) {
     next.push({
       widget_key: "stock",
       enabled: existing ? existing.enabled : true,
-      config: { symbols: currentSymbols },
+      config: {
+        symbols: currentSymbols,
+        period: parsed?.period,
+      },
     });
     return persist(next);
   }
@@ -170,7 +189,28 @@ export function useDeviceWidgets(deviceToken: string) {
     next.push({
       widget_key: "stock",
       enabled: existing.enabled,
-      config: { symbols: currentSymbols },
+      config: {
+        symbols: currentSymbols,
+        period: parsed?.period,
+      },
+    });
+    return persist(next);
+  }
+
+  /** Sets the default performance period (e.g. 1D, 5D, 1M, etc.) for the stock widget. */
+  async function setStockPeriod(period: StockPeriod): Promise<boolean> {
+    const existing = widgets.value.find((w) => w.widget_key === "stock");
+    const parsed = existing ? asStockConfig(existing) : null;
+    const currentSymbols = parsed ? [...parsed.symbols] : [];
+
+    const next = widgets.value.filter((w) => w.widget_key !== "stock");
+    next.push({
+      widget_key: "stock",
+      enabled: existing ? existing.enabled : true,
+      config: {
+        symbols: currentSymbols,
+        period,
+      },
     });
     return persist(next);
   }
@@ -184,6 +224,18 @@ export function useDeviceWidgets(deviceToken: string) {
 
   async function removeWidget(key: string): Promise<boolean> {
     return persist(widgets.value.filter((w) => w.widget_key !== key));
+  }
+
+  async function setWalkieTalkieGroup(groupId: string | null): Promise<boolean> {
+    const next = widgets.value.filter(w => w.widget_key !== "walkie_talkie");
+    next.push({ widget_key: "walkie_talkie", enabled: true, config: { group_id: groupId } });
+    return persist(next);
+  }
+
+  /** Clears screen widgets (e.g. weather, stock) while preserving phone features like walkie_talkie. */
+  async function clearScreenWidgets(): Promise<boolean> {
+    const next = widgets.value.filter(w => w.widget_key === "walkie_talkie");
+    return persist(next);
   }
 
   /** Clears every widget (the dropdown's "None" choice). */
@@ -202,6 +254,7 @@ export function useDeviceWidgets(deviceToken: string) {
     widgets,
     widgetsLoading,
     widgetsError,
+    widgetsNotice,
     saving,
     load,
     setWeatherCity,
@@ -209,8 +262,11 @@ export function useDeviceWidgets(deviceToken: string) {
     removeWeatherCity,
     addStockSymbol,
     removeStockSymbol,
+    setStockPeriod,
     setWidgetEnabled,
     removeWidget,
     clearWidgets,
+    clearScreenWidgets,
+    setWalkieTalkieGroup,
   };
 }
