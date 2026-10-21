@@ -100,6 +100,58 @@ pub async fn authorize_device(mut req: Request, ctx: RouteContext<()>) -> Result
     }
 }
 
+pub async fn reauthorize_device(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let token = match validation::require_route_token(ctx.param("token").map(String::as_str)) {
+        Ok(t) => t,
+        Err(err) => return err.to_response(),
+    };
+
+    let header = req.headers().get("Authorization").unwrap_or(None);
+    let auth_token = match validation::require_bearer_header(header.as_deref()) {
+        Ok(t) => t,
+        Err(err) => return err.to_response(),
+    };
+
+    let db = match get_db(&ctx) {
+        Ok(db) => db,
+        Err(err) => return err.to_response(),
+    };
+
+    let user = match AuthService::authenticate(&auth_token, &ctx.env, &db).await {
+        Ok(u) => u,
+        Err(err) => return err.to_response(),
+    };
+
+    let body: AuthorizeDeviceRequest = match req.json().await {
+        Ok(b) => b,
+        Err(_) => return json_error("Invalid JSON body.", 400),
+    };
+
+    let code_or_session = match validation::resolve_code_or_session(&body) {
+        Ok(c) => c,
+        Err(err) => {
+            Delay::from(std::time::Duration::from_secs(crate::common::FAILED_AUTHORIZE_DELAY_SECS)).await;
+            return err.to_response();
+        }
+    };
+
+    match DeviceService::reauthorize_device(
+        &db,
+        &ctx.env,
+        &user,
+        &token,
+        &code_or_session,
+    )
+    .await
+    {
+        Ok(res) => json_ok(&res),
+        Err(err) => {
+            Delay::from(std::time::Duration::from_secs(crate::common::FAILED_AUTHORIZE_DELAY_SECS)).await;
+            err.to_response()
+        }
+    }
+}
+
 pub async fn check_session(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let body: CheckSessionRequest = match req.json().await {
         Ok(b) => b,

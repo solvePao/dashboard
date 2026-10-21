@@ -47,6 +47,8 @@ pub trait PairingStore {
     async fn store_delete_device_token(&self, device_token: &str) -> AppResult<()>;
     async fn store_get_user_devices(&self, user_id: i64) -> AppResult<Vec<DeviceToken>>;
     async fn store_revoke_device_token(&self, user_id: i64, token: &str) -> AppResult<bool>;
+    async fn store_get_device_token(&self, user_id: i64, token: &str) -> AppResult<Option<DeviceToken>>;
+    async fn store_renew_device_token(&self, user_id: i64, token: &str) -> AppResult<bool>;
 }
 
 /// Push side of revocation: tells a live device its token just died.
@@ -198,6 +200,18 @@ impl PairingStore for D1Stores<'_> {
         db::revoke_device_token(self.0, user_id, token)
             .await
             .map_err(|_| AppError::bad_gateway("Failed to revoke device."))
+    }
+
+    async fn store_get_device_token(&self, user_id: i64, token: &str) -> AppResult<Option<DeviceToken>> {
+        db::get_device_token(self.0, user_id, token)
+            .await
+            .map_err(|_| AppError::bad_gateway("Failed to fetch device."))
+    }
+
+    async fn store_renew_device_token(&self, user_id: i64, token: &str) -> AppResult<bool> {
+        db::renew_device_token(self.0, user_id, token)
+            .await
+            .map_err(|_| AppError::bad_gateway("Failed to renew device token."))
     }
 }
 

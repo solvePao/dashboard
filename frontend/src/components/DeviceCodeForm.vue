@@ -73,7 +73,7 @@ defineExpose({
 
     <button
       type="button"
-      class="fe-codeform-submit w-full inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-xs font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:opacity-50"
+      class="fe-codeform-submit w-full inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-xs font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90 active:scale-[0.98] disabled:opacity-50"
       :disabled="loading || !codeInput.trim()"
       @click="handleSubmit"
     >

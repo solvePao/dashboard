@@ -44,6 +44,7 @@ struct FakePairingStore {
     tokens: Mutex<Vec<DeviceToken>>,
     fail_with: Mutex<Option<String>>,
     fail_insert: Mutex<bool>,
+    fail_renew: Mutex<bool>,
 }
 
 impl FakePairingStore {
@@ -53,6 +54,7 @@ impl FakePairingStore {
             tokens: Mutex::new(Vec::new()),
             fail_with: Mutex::new(None),
             fail_insert: Mutex::new(false),
+            fail_renew: Mutex::new(false),
         }
     }
     fn fail_next(&self, msg: &str) {
@@ -153,6 +155,34 @@ impl PairingStore for FakePairingStore {
         let before = tokens.len();
         tokens.retain(|t| !(t.user_id == user_id && t.token == token));
         Ok(tokens.len() != before)
+    }
+    async fn store_get_device_token(&self, user_id: i64, token: &str) -> AppResult<Option<DeviceToken>> {
+        if let Some(e) = self.take_fail() {
+            return Err(e);
+        }
+        Ok(self
+            .tokens
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|t| t.user_id == user_id && t.token == token)
+            .cloned())
+    }
+    async fn store_renew_device_token(&self, user_id: i64, token: &str) -> AppResult<bool> {
+        if let Some(e) = self.take_fail() {
+            return Err(e);
+        }
+        if *self.fail_renew.lock().unwrap() {
+            return Err(AppError::bad_gateway("renew down"));
+        }
+        let mut tokens = self.tokens.lock().unwrap();
+        if let Some(t) = tokens.iter_mut().find(|t| t.user_id == user_id && t.token == token) {
+            t.expires_at = "renewed".to_string();
+            t.last_used_at = Some("now".to_string());
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 }
 
@@ -939,5 +969,356 @@ async fn revoke_and_notify_hub() {
     assert!(!gone);
     assert_eq!(dev_notifier.calls.lock().unwrap().len(), 2);
     assert_eq!(hub_notifier.calls.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn reauthorize_ok_preserves_device_name_and_renews_token() {
+    let (store, client) = harness();
+    let sid = valid_session_id();
+    let created = DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
+        .await
+        .unwrap();
+
+    let user = sample_user(42);
+    store.tokens.lock().unwrap().push(DeviceToken {
+        token: "existing-device-token".to_string(),
+        user_id: 42,
+        device_name: "Kitchen iPad".to_string(),
+        created_at: "2026-01-01T00:00:00Z".to_string(),
+        expires_at: "2026-06-01T00:00:00Z".to_string(),
+        last_used_at: None,
+    });
+
+    let res = DeviceService::reauthorize_device_with(
+        &store,
+        &client,
+        &user,
+        "existing-device-token",
+        &created.short_code,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(res.status, "authorized");
+    assert_eq!(res.device_name, "Kitchen iPad");
+    assert_eq!(res.session_id, sid);
+
+    // Verify token was renewed in store
+    let tokens = store.tokens.lock().unwrap();
+    let tok = tokens.iter().find(|t| t.token == "existing-device-token").unwrap();
+    assert_eq!(tok.expires_at, "renewed");
+    assert_eq!(tok.last_used_at.as_deref(), Some("now"));
+
+    // Verify client received the existing token
+    let status = DeviceService::check_session_with(&client, &sid).await.unwrap();
+    assert_eq!(status.token.as_deref(), Some("existing-device-token"));
+    assert_eq!(status.user.map(|u| u.id), Some(42));
+}
+
+#[tokio::test]
+async fn reauthorize_rejects_unknown_or_wrong_owner_device() {
+    let (store, client) = harness();
+    let sid = valid_session_id();
+    let created = DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
+        .await
+        .unwrap();
+
+    let user = sample_user(42);
+    // Token owned by another user (43)
+    store.tokens.lock().unwrap().push(DeviceToken {
+        token: "user43-device".to_string(),
+        user_id: 43,
+        device_name: "Other Device".to_string(),
+        created_at: "2026-01-01T00:00:00Z".to_string(),
+        expires_at: "2026-06-01T00:00:00Z".to_string(),
+        last_used_at: None,
+    });
+
+    // Attempt to reauthorize nonexistent token -> 404
+    let err1 = DeviceService::reauthorize_device_with(
+        &store,
+        &client,
+        &user,
+        "nonexistent-token",
+        &created.short_code,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err1.status, 404);
+
+    // Attempt to reauthorize other user's token -> 404
+    let err2 = DeviceService::reauthorize_device_with(
+        &store,
+        &client,
+        &user,
+        "user43-device",
+        &created.short_code,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err2.status, 404);
+}
+
+#[tokio::test]
+async fn reauthorize_rejects_already_authorized_or_expired_session() {
+    let (store, client) = harness();
+    let sid = valid_session_id();
+    DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
+        .await
+        .unwrap();
+
+    let user = sample_user(42);
+    store.tokens.lock().unwrap().push(DeviceToken {
+        token: "existing-device".to_string(),
+        user_id: 42,
+        device_name: "Existing".to_string(),
+        created_at: "2026-01-01T00:00:00Z".to_string(),
+        expires_at: "2026-06-01T00:00:00Z".to_string(),
+        last_used_at: None,
+    });
+
+    // Authorize it first
+    DeviceService::authorize_device_with(&store, &client, &user, &sid, None, || {
+        Ok("first-token".to_string())
+    })
+    .await
+    .unwrap();
+
+    // Now reauthorize on the already-authorized session -> 409
+    let err = DeviceService::reauthorize_device_with(
+        &store,
+        &client,
+        &user,
+        "existing-device",
+        &sid,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err.status, 409);
+
+    // Reauthorize with nonexistent code -> 404
+    let err_missing = DeviceService::reauthorize_device_with(
+        &store,
+        &client,
+        &user,
+        "existing-device",
+        "ZZZZZZ",
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err_missing.status, 404);
+}
+
+#[tokio::test]
+async fn reauthorize_and_notify_hub() {
+    let (store, client) = harness();
+    let hub = FakeHubNotifier::new();
+    let sid = valid_session_id();
+    let created = DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
+        .await
+        .unwrap();
+
+    let user = sample_user(42);
+    store.tokens.lock().unwrap().push(DeviceToken {
+        token: "notified-tok".to_string(),
+        user_id: 42,
+        device_name: "Hub Notified Device".to_string(),
+        created_at: "c".to_string(),
+        expires_at: "e".to_string(),
+        last_used_at: None,
+    });
+
+    DeviceService::reauthorize_device_and_notify_with(
+        &store,
+        &client,
+        &hub,
+        &user,
+        "notified-tok",
+        &created.short_code,
+    )
+    .await
+    .unwrap();
+
+    let calls = hub.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls[0],
+        (42, DeviceLifecycleKind::Authorized, Some("notified-tok".to_string()))
+    );
+}
+
+#[tokio::test]
+async fn reauthorize_refused_commit_returns_409() {
+    let (store, client) = harness();
+    let sid = valid_session_id();
+    DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
+        .await
+        .unwrap();
+    let user = sample_user(42);
+    store.tokens.lock().unwrap().push(DeviceToken {
+        token: "tok-refuse".to_string(),
+        user_id: 42,
+        device_name: "Refused Dev".to_string(),
+        created_at: "c".to_string(),
+        expires_at: "e".to_string(),
+        last_used_at: None,
+    });
+    *client.refuse_commit.lock().unwrap() = true;
+    let err = DeviceService::reauthorize_device_with(
+        &store,
+        &client,
+        &user,
+        "tok-refuse",
+        &sid,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err.status, 409);
+}
+
+#[tokio::test]
+async fn reauthorize_commit_error_propagates() {
+    let (store, client) = harness();
+    let sid = valid_session_id();
+    DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
+        .await
+        .unwrap();
+    let user = sample_user(42);
+    store.tokens.lock().unwrap().push(DeviceToken {
+        token: "tok-fail".to_string(),
+        user_id: 42,
+        device_name: "Fail Dev".to_string(),
+        created_at: "c".to_string(),
+        expires_at: "e".to_string(),
+        last_used_at: None,
+    });
+    *client.fail_commit.lock().unwrap() = true;
+    let err = DeviceService::reauthorize_device_with(
+        &store,
+        &client,
+        &user,
+        "tok-fail",
+        &sid,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err.status, 502);
+}
+
+#[tokio::test]
+async fn reauthorize_rejects_expired_status() {
+    let (store, client) = harness();
+    let sid = valid_session_id();
+    DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
+        .await
+        .unwrap();
+    client.states.lock().unwrap().get_mut(&sid).unwrap().status = "expired".to_string();
+    let user = sample_user(42);
+    store.tokens.lock().unwrap().push(DeviceToken {
+        token: "tok-exp".to_string(),
+        user_id: 42,
+        device_name: "Exp Dev".to_string(),
+        created_at: "c".to_string(),
+        expires_at: "e".to_string(),
+        last_used_at: None,
+    });
+    let err = DeviceService::reauthorize_device_with(
+        &store,
+        &client,
+        &user,
+        "tok-exp",
+        &sid,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err.status, 404);
+}
+
+#[tokio::test]
+async fn reauthorize_error_does_not_notify_hub() {
+    let (store, client) = harness();
+    let hub = FakeHubNotifier::new();
+    let user = sample_user(42);
+    let err = DeviceService::reauthorize_device_and_notify_with(
+        &store,
+        &client,
+        &hub,
+        &user,
+        "nonexistent",
+        "ZZZZZZ",
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err.status, 404);
+    assert!(hub.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn reauthorize_propagates_store_and_client_failures() {
+    let user = sample_user(42);
+    let sid = valid_session_id();
+
+    // 1. Invalid/empty code
+    let (store, client) = harness();
+    let err = DeviceService::reauthorize_device_with(&store, &client, &user, "tok", "   ")
+        .await
+        .unwrap_err();
+    assert_eq!(err.status, 400);
+
+    // 2. Code index failure
+    let (store, client) = harness();
+    store.fail_next("index down");
+    let err = DeviceService::reauthorize_device_with(&store, &client, &user, "tok", "abcdef")
+        .await
+        .unwrap_err();
+    assert_eq!(err.status, 502);
+
+    // 3. Client status failure
+    let (store, client) = harness();
+    DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
+        .await
+        .unwrap();
+    client.fail_next("do down");
+    let err = DeviceService::reauthorize_device_with(&store, &client, &user, "tok", &sid)
+        .await
+        .unwrap_err();
+    assert_eq!(err.status, 502);
+
+    // 4. Session not found in DO
+    let (store, client) = harness();
+    let err = DeviceService::reauthorize_device_with(&store, &client, &user, "tok", &sid)
+        .await
+        .unwrap_err();
+    assert_eq!(err.status, 404);
+
+    // 5. Device lookup failure in store
+    let (store, client) = harness();
+    DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
+        .await
+        .unwrap();
+    store.fail_next("db error on get device");
+    let err = DeviceService::reauthorize_device_with(&store, &client, &user, "tok", &sid)
+        .await
+        .unwrap_err();
+    assert_eq!(err.status, 502);
+
+    // 6. Renew token failure in store
+    let (store, client) = harness();
+    DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
+        .await
+        .unwrap();
+    store.tokens.lock().unwrap().push(DeviceToken {
+        token: "tok-renew-fail".to_string(),
+        user_id: 42,
+        device_name: "Dev".to_string(),
+        created_at: "c".to_string(),
+        expires_at: "e".to_string(),
+        last_used_at: None,
+    });
+    *store.fail_renew.lock().unwrap() = true;
+    let err = DeviceService::reauthorize_device_with(&store, &client, &user, "tok-renew-fail", &sid)
+        .await
+        .unwrap_err();
+    assert_eq!(err.status, 502);
 }
 

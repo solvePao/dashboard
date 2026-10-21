@@ -73,6 +73,9 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .delete_async("/api/devices/:token", |req, ctx| async move {
             routes::device::revoke_device(req, ctx).await
         })
+        .post_async("/api/devices/:token/reauthorize", |req, ctx| async move {
+            routes::device::reauthorize_device(req, ctx).await
+        })
         .get_async("/api/devices/:token/widgets", |req, ctx| async move {
             routes::device::get_device_widgets(req, ctx).await
         })

@@ -355,18 +355,18 @@ onBeforeUnmount(() => {
 
 <template>
   <AppDialog :open="open" title="Add market symbol" @close="emit('close')">
-    <div class="fe-stockmodal-header flex items-center justify-between border-b border-border/80 pb-3">
-      <div>
+    <div class="fe-stockmodal-header flex items-center justify-between border-b border-border/80 pb-3 sm:pb-4">
+      <div class="min-w-0 pr-2">
         <h2 id="stock-picker-title" class="text-base font-semibold leading-tight text-foreground">
           Add Market Symbol
         </h2>
-        <p class="text-xs text-muted-foreground mt-0.5">
+        <p class="text-xs text-muted-foreground mt-0.5 truncate">
           Indian equities (NSE/BSE), NYSE, NASDAQ, crypto, or forex pairs
         </p>
       </div>
       <button
         type="button"
-        class="rounded-lg p-1.5 text-muted-foreground transition hover:bg-accent hover:text-foreground cursor-pointer"
+        class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-accent hover:text-foreground cursor-pointer"
         aria-label="Close"
         @click="emit('close')"
       >
@@ -378,7 +378,7 @@ onBeforeUnmount(() => {
     <div class="mt-3 flex rounded-xl bg-muted/60 p-1 border border-border/60">
       <button
         type="button"
-        class="flex flex-1 items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-semibold transition cursor-pointer"
+        class="flex flex-1 min-h-[40px] items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition cursor-pointer"
         :class="
           activeTab === 'stock'
             ? 'bg-card text-foreground shadow-xs border border-border/60'
@@ -391,7 +391,7 @@ onBeforeUnmount(() => {
       </button>
       <button
         type="button"
-        class="flex flex-1 items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-semibold transition cursor-pointer"
+        class="flex flex-1 min-h-[40px] items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition cursor-pointer"
         :class="
           activeTab === 'forex'
             ? 'bg-card text-foreground shadow-xs border border-border/60'
@@ -404,15 +404,16 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
+    <Transition name="fe-tab-fade" mode="out-in">
     <!-- TAB 1: Stocks & Markets -->
-    <div v-if="activeTab === 'stock'" class="mt-3 space-y-3">
+    <div v-if="activeTab === 'stock'" key="stock" class="mt-3 space-y-3">
       <!-- Market Category Filter Pills -->
-      <div class="flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px] scrollbar-none">
+      <div class="flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px] no-scrollbar">
         <button
           v-for="m in MARKET_FILTERS"
           :key="m.key"
           type="button"
-          class="shrink-0 rounded-full border px-2.5 py-1 font-medium transition cursor-pointer"
+          class="shrink-0 min-h-[34px] rounded-full border px-3 py-1 font-medium transition cursor-pointer active:scale-95"
           :class="
             activeMarket === m.key
               ? 'border-primary bg-primary text-primary-foreground font-semibold shadow-xs'
@@ -433,7 +434,7 @@ onBeforeUnmount(() => {
           type="text"
           :placeholder="searchPlaceholder"
           autocomplete="off"
-          class="w-full rounded-lg border border-input bg-background py-2.5 pl-9 pr-9 text-xs sm:text-sm font-mono uppercase text-foreground placeholder:font-sans placeholder:normal-case placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          class="w-full min-h-[44px] rounded-lg border border-input bg-background py-2.5 pl-9 pr-9 text-xs sm:text-sm font-mono uppercase text-foreground placeholder:font-sans placeholder:normal-case placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           @keydown.enter.prevent="query.trim() && executeSearch(query)"
         />
         <Loader2
@@ -469,7 +470,7 @@ onBeforeUnmount(() => {
       <!-- Search Results List (Disambiguation) -->
       <div
         v-if="searchResults.length > 0 && query.trim().length > 0"
-        class="space-y-1 max-h-48 overflow-y-auto overscroll-contain pr-1 rounded-lg border border-border/60 bg-muted/10 p-1"
+        class="space-y-1 max-h-48 overflow-y-auto overscroll-contain pr-1 rounded-lg border border-border/60 bg-muted/10 p-1 animate-in fade-in-0 duration-150"
       >
         <div class="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground flex justify-between">
           <span>Search Results ({{ searchResults.length }})</span>
@@ -479,7 +480,7 @@ onBeforeUnmount(() => {
           v-for="item in searchResults"
           :key="item.ticker"
           type="button"
-          class="w-full flex items-center justify-between rounded-md p-2 text-left transition hover:bg-muted/80 cursor-pointer"
+          class="w-full flex items-center justify-between rounded-md p-2 text-left transition hover:bg-muted/80 active:scale-[0.99] cursor-pointer"
           :class="
             verifiedQuote && verifiedQuote.ticker === item.ticker
               ? 'bg-primary/10 border border-primary/40'
@@ -517,16 +518,16 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- TAB 2: Currency Pair (Forex) -->
-    <div v-else class="mt-3 space-y-3">
+    <div v-else key="forex" class="mt-3 space-y-3">
       <div class="flex items-center gap-2">
         <!-- From Currency -->
-        <div class="flex-1">
+        <div class="flex-1 min-w-0">
           <label class="block text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">
             From Currency
           </label>
           <select
             v-model="fromCurrency"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-xs sm:text-sm font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
+            class="w-full min-h-[44px] rounded-lg border border-input bg-background px-3 py-2 text-xs sm:text-sm font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
           >
             <option v-for="c in POPULAR_CURRENCIES" :key="c.code" :value="c.code">
               {{ c.code }} - {{ c.name }} ({{ c.symbol }})
@@ -538,7 +539,7 @@ onBeforeUnmount(() => {
         <div class="pt-5 shrink-0">
           <button
             type="button"
-            class="rounded-lg border border-border bg-muted/40 p-2 text-muted-foreground transition hover:bg-accent hover:text-foreground active:scale-95 cursor-pointer"
+            class="flex h-11 w-11 items-center justify-center rounded-lg border border-border bg-muted/40 p-2 text-muted-foreground transition hover:bg-accent hover:text-foreground active:scale-95 cursor-pointer"
             title="Swap From and To currencies"
             @click="swapCurrencies"
           >
@@ -547,13 +548,13 @@ onBeforeUnmount(() => {
         </div>
 
         <!-- To Currency -->
-        <div class="flex-1">
+        <div class="flex-1 min-w-0">
           <label class="block text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">
             To Currency
           </label>
           <select
             v-model="toCurrency"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-xs sm:text-sm font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
+            class="w-full min-h-[44px] rounded-lg border border-input bg-background px-3 py-2 text-xs sm:text-sm font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
           >
             <option v-for="c in POPULAR_CURRENCIES" :key="c.code" :value="c.code">
               {{ c.code }} - {{ c.name }} ({{ c.symbol }})
@@ -572,7 +573,7 @@ onBeforeUnmount(() => {
             v-for="pair in POPULAR_PAIRS"
             :key="`${pair.from}-${pair.to}`"
             type="button"
-            class="rounded-md border border-border/70 bg-muted/30 px-2 py-1 text-[11px] font-mono font-medium text-foreground transition hover:border-primary/50 hover:bg-muted cursor-pointer"
+            class="rounded-md border border-border/70 bg-muted/30 px-2 py-1 text-[11px] font-mono font-medium text-foreground transition hover:border-primary/50 hover:bg-muted active:scale-95 cursor-pointer"
             :class="
               fromCurrency === pair.from && toCurrency === pair.to
                 ? 'border-primary bg-primary/10 text-primary font-bold'
@@ -585,11 +586,12 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+    </Transition>
 
     <!-- Error State -->
     <div
       v-if="error"
-      class="mt-3 rounded-xl border border-destructive/20 bg-destructive/10 p-3 text-xs text-destructive"
+      class="mt-3 rounded-xl border border-destructive/20 bg-destructive/10 p-3 text-xs text-destructive animate-in fade-in-0 duration-150"
       role="alert"
     >
       {{ error }}
@@ -598,7 +600,7 @@ onBeforeUnmount(() => {
     <!-- Verified Quote Preview Card -->
     <div
       v-else-if="verifiedQuote"
-      class="mt-3 rounded-xl border border-border bg-muted/40 p-3.5 transition-all animate-in fade-in-50"
+      class="mt-3 rounded-xl border border-border bg-muted/40 p-3.5 transition-all animate-in fade-in-50 duration-150"
     >
       <div class="flex items-center justify-between">
         <div>
@@ -635,16 +637,16 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div class="mt-3 pt-3 border-t border-border/60 flex items-center justify-between">
+      <div class="mt-3 pt-3 border-t border-border/60 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5">
         <span class="text-[10px] text-muted-foreground font-mono">
           Feed: {{ verifiedQuote.ticker }}
         </span>
         <button
           type="button"
-          class="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-1.5 text-xs font-semibold text-primary-foreground shadow-xs transition hover:bg-primary/90 cursor-pointer"
+          class="inline-flex min-h-[44px] sm:min-h-0 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 sm:py-1.5 sm:px-3 text-xs font-semibold text-primary-foreground shadow-xs transition hover:bg-primary/90 active:scale-[0.98] cursor-pointer"
           @click="handleAdd"
         >
-          <Check class="h-3.5 w-3.5" />
+          <Check class="h-4 w-4 sm:h-3.5 sm:w-3.5" />
           <span>Add to Watchlist</span>
         </button>
       </div>
@@ -653,9 +655,34 @@ onBeforeUnmount(() => {
     <!-- Empty state hint -->
     <p
       v-else-if="!searching && !verifying && activeTab === 'stock' && query.trim().length === 0"
-      class="mt-2 text-center text-[11px] text-muted-foreground"
+      class="mt-2 text-center text-[11px] text-muted-foreground animate-in fade-in-0 duration-150"
     >
       Select a market above, click a preset, or type any stock or index symbol to preview.
     </p>
   </AppDialog>
 </template>
+
+<style scoped>
+/* Tab switch: same tokens as mobile stock-symbol-flip (opacity + 6px rise) */
+.fe-tab-fade-enter-active,
+.fe-tab-fade-leave-active {
+  transition: opacity 0.16s ease-out,
+    transform 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.fe-tab-fade-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.fe-tab-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fe-tab-fade-enter-active,
+  .fe-tab-fade-leave-active {
+    transition: opacity 0.2s ease !important;
+    transform: none !important;
+  }
+}
+</style>

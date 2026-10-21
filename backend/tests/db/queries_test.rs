@@ -33,6 +33,11 @@ fn device_sql_builders() {
     let d = get_user_devices_sql();
     assert!(d.contains("device_tokens"));
     assert!(d.contains("ORDER BY created_at DESC"));
+    let single = get_device_token_by_user_sql();
+    assert!(single.contains("user_id = ?1 AND token = ?2"));
+    let ren = renew_device_token_sql();
+    assert!(ren.contains(TOKEN_EXPIRY_SQL));
+    assert!(ren.contains("token = ?1 AND user_id = ?2"));
 }
 
 #[test]

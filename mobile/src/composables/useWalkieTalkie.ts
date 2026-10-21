@@ -53,8 +53,9 @@ export function useWalkieTalkie(groupId: Ref<string | null>) {
   const release = () => session?.release();
   const pause = () => { lifecycle++; resumeTarget = null; session?.pause(); };
   const visibility = () => {
-    if (document.visibilityState === "hidden") { diagnostic("hidden"); pause(); observer.stop(); }
-    else observer.start();
+    if (document.visibilityState === "visible") {
+      observer.start();
+    }
   };
   const pagehide = () => { diagnostic("pagehide"); pause(); observer.stop(); };
   async function switchGroup(id: string): Promise<void> {
@@ -78,9 +79,11 @@ export function useWalkieTalkie(groupId: Ref<string | null>) {
 
   const unsubscribeDeviceSocket = subscribeDeviceSocket(event => {
     if (event.status === "walkie_activate") {
-      if ((!event.group_id || event.group_id === groupId.value) && document.visibilityState === "visible") {
+      if (!event.group_id || event.group_id === groupId.value) {
         if (state.value.status === "activation") {
-          state.value = { ...state.value, message: "Your group is calling. Enable audio to talk and listen." };
+          state.value = { ...state.value, message: "Incoming call… connecting audio" };
+          diagnostic("wake_enable");
+          void session?.enable();
         }
       }
     }
@@ -96,5 +99,5 @@ export function useWalkieTalkie(groupId: Ref<string | null>) {
     window.removeEventListener("blur", release); window.removeEventListener("pagehide", pagehide); document.removeEventListener("visibilitychange", visibility);
   });
   return { state, groups, activityError, switching, otherActivity: computed(() => activity.value.filter(item => item.groupId !== groupId.value)), switchGroup,
-    enable: () => { diagnostic("enable"); return session?.enable(); }, pause: () => { diagnostic("pause"); pause(); }, press: () => session?.press(), release, resumePlayback: () => session?.resumePlayback() };
+    enable: (autoPress = false) => { diagnostic("enable"); return session?.enable(autoPress); }, pause: () => { diagnostic("pause"); pause(); }, press: () => session?.press(), release, resumePlayback: () => session?.resumePlayback() };
 }

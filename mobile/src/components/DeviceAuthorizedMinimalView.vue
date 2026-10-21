@@ -2,7 +2,6 @@
 import { ref } from "vue";
 import {
   CalendarDays,
-  CheckCircle2,
   Clock,
   Timer,
 } from "@lucide/vue";
@@ -55,14 +54,11 @@ function toggleAnimation(): void {
 
 <template>
   <div class="mo-minimal-root flex h-full w-full flex-col justify-between p-2.5 sm:p-3 overflow-hidden select-none">
-    <!-- Streamlined Header: Ultra-compact Connected & Welcome row + View Switcher -->
+    <!-- Streamlined Header: Ultra-compact Status dot + View Switcher -->
     <div class="mo-minimal-header flex items-center justify-between border-b border-border/50 pb-1.5 shrink-0 gap-2">
-      <!-- Minimized Connected & Welcome Name -->
-      <div class="flex items-center gap-1.5 min-w-0 pr-1">
+      <!-- Minimal status indicator: pulsing dot only -->
+      <div class="flex items-center min-w-0 pr-1" title="Connected">
         <span class="h-2 w-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
-        <span class="truncate text-xs text-muted-foreground font-medium">
-          Connected · <strong class="text-foreground font-semibold">{{ user.name ? `Welcome, ${user.name}` : "Welcome" }}</strong>
-        </span>
       </div>
 
       <!-- Segmented View Mode Switcher -->
@@ -134,26 +130,6 @@ function toggleAnimation(): void {
           key="calendar"
         />
       </Transition>
-    </div>
-
-    <!-- Streamlined Footer: Synchronized info only (Token Expiry removed) -->
-    <div class="mo-minimal-footer border-t border-border/50 pt-1.5 flex items-center justify-between text-xs text-muted-foreground shrink-0">
-      <div class="flex items-center gap-1.5">
-        <CheckCircle2 class="h-3.5 w-3.5 text-emerald-500" />
-        <span class="text-[11px] font-medium">Synchronized</span>
-      </div>
-
-      <div class="flex items-center gap-2 text-[11px]">
-        <span v-if="activeMode === 'analog'" class="text-muted-foreground/80 font-mono">
-          {{ smoothAnimation ? "Sweep: 60fps" : "Tick: 1s" }}
-        </span>
-        <span v-else-if="activeMode === 'digital'" class="text-muted-foreground/80">
-          Live Clock
-        </span>
-        <span v-else class="text-muted-foreground/80">
-          Interactive Calendar
-        </span>
-      </div>
     </div>
   </div>
 </template>

@@ -103,8 +103,11 @@ export interface StockSymbolItem {
   currency?: string;
 }
 
+export type StockPeriod = "1D" | "5D" | "1W" | "1M" | "3M" | "6M" | "YTD" | "1Y";
+
 export interface StockWidgetConfig {
   symbols: StockSymbolItem[];
+  period?: StockPeriod;
   symbol?: string;
   name?: string;
 }
@@ -144,8 +147,19 @@ export function asStockConfig(widget: DeviceWidget | undefined): StockWidgetConf
 
   if (validSymbols.length === 0) return null;
 
+  const rawPeriod = typeof raw.period === "string"
+    ? raw.period.trim().toUpperCase()
+    : typeof raw.default_period === "string"
+    ? raw.default_period.trim().toUpperCase()
+    : undefined;
+  const validPeriods: StockPeriod[] = ["1D", "5D", "1W", "1M", "3M", "6M", "YTD", "1Y"];
+  const period = rawPeriod && validPeriods.includes(rawPeriod as StockPeriod)
+    ? (rawPeriod as StockPeriod)
+    : undefined;
+
   return {
     symbols: validSymbols,
+    period,
     symbol: validSymbols[0].symbol,
     name: validSymbols[0].name,
   };

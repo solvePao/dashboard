@@ -1,3 +1,5 @@
+mod media;
+
 use super::{repository::WalkieRepository, sfu::SfuService, *};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -9,6 +11,10 @@ struct Room {
     clients: BTreeMap<String, Client>,
     speaker: Option<Speaker>,
     cleanup: Vec<MediaSession>,
+    #[serde(default)]
+    cleanup_in_flight: Option<MediaSession>,
+    #[serde(default)]
+    cleanup_started_at: u64,
     #[serde(default)]
     tickets: BTreeMap<String, Ticket>,
 }
@@ -34,6 +40,8 @@ struct Client {
 #[derive(Clone, Serialize, Deserialize)]
 struct MediaSession {
     id: String,
+    #[serde(default)]
+    pending: bool,
     mids: Vec<String>,
     target: Option<String>,
     #[serde(default)]
@@ -73,16 +81,22 @@ impl WalkieGroupObject {
 
     async fn save(&self, room: &Room) -> Result<()> {
         self.state.storage().put("room", room).await?;
-        if !room.clients.is_empty() || !room.cleanup.is_empty() || !room.tickets.is_empty() {
+        if !room.clients.is_empty()
+            || !room.cleanup.is_empty()
+            || room.cleanup_in_flight.is_some()
+            || !room.tickets.is_empty()
+        {
             let delay = room
                 .speaker
                 .as_ref()
                 .map(|s| s.expires_at.saturating_sub(now()).max(1))
-                .unwrap_or(if room.cleanup.is_empty() {
-                    15_000
-                } else {
-                    1000
-                });
+                .unwrap_or(
+                    if room.cleanup.is_empty() || room.cleanup_in_flight.is_some() {
+                        15_000
+                    } else {
+                        1000
+                    },
+                );
             self.state
                 .storage()
                 .set_alarm(Duration::from_millis(delay.min(15_000)))
@@ -168,65 +182,34 @@ impl WalkieGroupObject {
         }
     }
 
-    async fn cleanup(&self, room: &mut Room) -> Result<()> {
-        // Keep each event bounded. Close one session per turn; alarms drain the queue.
-        let pending = if room.cleanup.is_empty() {
-            Vec::new()
-        } else {
-            vec![room.cleanup.remove(0)]
-        };
-        let sfu = SfuService(&self.env);
-        for mut session in pending {
-            // Inspect even partially negotiated sessions: a failed response can hide created mids.
-            let result = match sfu
-                .request(Method::Get, &format!("/sessions/{}", session.id), None)
-                .await
-            {
-                Ok(v) => {
-                    session.mids = v
-                        .get("tracks")
-                        .and_then(Value::as_array)
-                        .into_iter()
-                        .flatten()
-                        .filter(|t| t.get("status").and_then(Value::as_str) != Some("inactive"))
-                        .filter_map(|t| t.get("mid").and_then(Value::as_str).map(str::to_string))
-                        .collect();
-                    sfu.close(&session.id, &session.mids).await
-                }
-                Err(e) if e.status == 410 || e.status == 404 || e.status == 425 => Ok(()),
-                Err(e) => Err(e),
-            };
-            if result.is_err() {
-                session.attempts += 1;
-                if session.attempts < 5 {
-                    console_error!("walkie media teardown pending retry");
-                    room.cleanup.push(session);
-                } else {
-                    console_error!("walkie media teardown dropped after max retries");
-                }
-            }
-        }
-        self.save(room).await
-    }
-
     async fn prune_state(&self, room: &mut Room) -> Result<()> {
         room.tickets.retain(|_, t| t.expires_at > now());
         let db = self.env.d1("dashboard")?;
         let repo = WalkieRepository(&db);
-        let mut removed = Vec::new();
-        for (id, c) in &room.clients {
-            let access = if c.observe {
-                repo.device_member(&room.group_id, &c.token).await
-            } else {
-                repo.device_group(&c.token).await
-            };
-            let valid = access
-                .ok()
-                .is_some_and(|(g, uid)| g.id == room.group_id && uid == c.user_id);
-            if !valid || c.device_id.is_empty() || c.last_seen + 45_000 < now() {
-                removed.push(id.clone());
-            }
+        #[derive(Deserialize)]
+        struct Authorized {
+            token: String,
+            user_id: i64,
+            active: i64,
         }
+        // Validate the room in one database read rather than one round trip per check per socket.
+        let authorized = repo.rows::<Authorized>(
+            "SELECT t.token,t.user_id,EXISTS(SELECT 1 FROM walkie_assignments a WHERE a.token=t.token AND a.group_id=m.group_id AND json_extract(w.config_json,'$.group_id')=m.group_id) AS active FROM device_tokens t JOIN walkie_device_members m ON m.token=t.token JOIN device_widgets w ON w.token=t.token AND w.widget_key='walkie_talkie' AND w.enabled=1 WHERE m.group_id=? AND t.expires_at>strftime('%Y-%m-%dT%H:%M:%fZ','now')",
+            &[D1Type::Text(&room.group_id)],
+        ).await.map_err(|error| Error::RustError(error.message))?;
+        let removed: Vec<String> = room
+            .clients
+            .iter()
+            .filter(|(_, client)| {
+                !authorized.iter().any(|entry| {
+                    entry.token == client.token
+                        && entry.user_id == client.user_id
+                        && (client.observe || entry.active != 0)
+                }) || client.device_id.is_empty()
+                    || client.last_seen + 45_000 < now()
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
         for id in removed {
             self.remove(
                 room,
@@ -278,11 +261,11 @@ impl WalkieGroupObject {
             }
             self.prune_state(&mut room).await?;
             self.broadcast(&room).await?;
-            self.cleanup(&mut room).await?;
+            self.save(&room).await?;
             return Ok(Response::from_json(
-                &json!({"ok":true,"cleanup_pending":!room.cleanup.is_empty()}),
+                &json!({"ok":true,"cleanup_pending":!room.cleanup.is_empty() || room.cleanup_in_flight.is_some()}),
             )?
-            .with_status(if room.cleanup.is_empty() { 200 } else { 202 }));
+            .with_status(if room.cleanup.is_empty() && room.cleanup_in_flight.is_none() { 200 } else { 202 }));
         }
         let token = body.get("token").and_then(Value::as_str).unwrap_or("");
         let db = self.env.d1("dashboard")?;
@@ -353,12 +336,7 @@ impl WalkieGroupObject {
             {
                 return Response::error("Audio session ended", 403);
             }
-            self.prune(&mut room).await?;
-            if !room.clients.contains_key(connection) {
-                return Response::error("Audio session ended", 403);
-            }
             let result = self.media(&mut room, connection, &data).await;
-            self.save(&room).await?;
             return match result {
                 Ok(v) => Response::from_json(&v),
                 Err(e) => e.to_response(),
@@ -443,150 +421,8 @@ impl WalkieGroupObject {
                 .to_string(),
         )?;
         self.broadcast(&room).await?;
-        self.cleanup(&mut room).await?;
+        self.save(&room).await?;
         Response::from_websocket(pair.client)
-    }
-
-    async fn media(&self, room: &mut Room, id: &str, data: &Value) -> AppResult<Value> {
-        let sfu = SfuService(&self.env);
-        let op = data.get("operation").and_then(Value::as_str).unwrap_or("");
-        if op == "ice" {
-            return sfu.ice_servers().await.map(|v| json!({"ice_servers":v}));
-        }
-        if op == "ready" {
-            let c = room.clients.get_mut(id).unwrap();
-            if !c
-                .sessions
-                .iter()
-                .any(|s| s.target.is_none() && !s.mids.is_empty())
-            {
-                return Err(AppError::bad_request("Publish audio first."));
-            }
-            c.published = true;
-            self.save(room).await.map_err(db_error)?;
-            self.broadcast(room).await.map_err(db_error)?;
-            return Ok(json!({"ok":true}));
-        }
-        if op == "publish" || op == "subscribe" {
-            let target = if op == "subscribe" {
-                let t = data
-                    .get("target")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| AppError::bad_request("Missing publication."))?;
-                if t == id {
-                    return Err(AppError::bad_request("Cannot subscribe to yourself."));
-                }
-                let publisher = room
-                    .clients
-                    .get(t)
-                    .filter(|c| c.published)
-                    .ok_or_else(|| AppError::not_found("Friend is reconnecting."))?;
-                let session = publisher
-                    .sessions
-                    .iter()
-                    .find(|s| s.target.is_none())
-                    .ok_or_else(|| AppError::not_found("Audio is not ready."))?;
-                Some((t.to_string(), session.id.clone()))
-            } else {
-                None
-            };
-            let client = room.clients.get(id).unwrap();
-            if client.sessions.len() >= 5
-                || client
-                    .sessions
-                    .iter()
-                    .any(|s| s.target.as_deref() == target.as_ref().map(|t| t.0.as_str()))
-            {
-                return Err(AppError::new(
-                    "Audio session already exists. Reconnect audio.",
-                    409,
-                ));
-            }
-            let created = sfu.request(Method::Post, "/sessions/new", None).await?;
-            let session = created
-                .get("sessionId")
-                .and_then(Value::as_str)
-                .ok_or_else(|| AppError::bad_gateway("Invalid audio session."))?
-                .to_string();
-            room.clients
-                .get_mut(id)
-                .unwrap()
-                .sessions
-                .push(MediaSession {
-                    id: session.clone(),
-                    mids: Vec::new(),
-                    target: target.as_ref().map(|t| t.0.clone()),
-                    attempts: 0,
-                });
-            self.save(room).await.map_err(db_error)?;
-            let request = if let Some((_, publisher)) = target {
-                json!({"tracks":[{"location":"remote","sessionId":publisher,"trackName":"audio"}]})
-            } else {
-                let mid = data
-                    .get("mid")
-                    .and_then(Value::as_str)
-                    .filter(|s| s.len() < 16)
-                    .ok_or_else(|| AppError::bad_request("Missing audio track."))?;
-                let sdp = data
-                    .get("sdp")
-                    .and_then(Value::as_str)
-                    .filter(|s| s.len() < 100_000)
-                    .ok_or_else(|| AppError::bad_request("Invalid offer."))?;
-                json!({"sessionDescription":{"type":"offer","sdp":sdp},"tracks":[{"location":"local","mid":mid,"trackName":"audio"}]})
-            };
-            let mut result = sfu
-                .request(
-                    Method::Post,
-                    &format!("/sessions/{session}/tracks/new"),
-                    Some(request),
-                )
-                .await?;
-            let mids = result
-                .get("tracks")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|t| t.get("mid").and_then(Value::as_str).map(str::to_string))
-                .collect();
-            room.clients
-                .get_mut(id)
-                .unwrap()
-                .sessions
-                .iter_mut()
-                .find(|s| s.id == session)
-                .unwrap()
-                .mids = mids;
-            result["session_id"] = json!(session);
-            return Ok(result);
-        }
-        if op == "answer" {
-            let session = data.get("session_id").and_then(Value::as_str).unwrap_or("");
-            if !room
-                .clients
-                .get(id)
-                .unwrap()
-                .sessions
-                .iter()
-                .any(|s| s.id == session)
-            {
-                return Err(AppError::forbidden(
-                    "Session does not belong to this connection.",
-                ));
-            }
-            let sdp = data
-                .get("sdp")
-                .and_then(Value::as_str)
-                .filter(|s| s.len() < 100_000)
-                .ok_or_else(|| AppError::bad_request("Invalid answer."))?;
-            return sfu
-                .request(
-                    Method::Put,
-                    &format!("/sessions/{session}/renegotiate"),
-                    Some(json!({"sessionDescription":{"type":"answer","sdp":sdp}})),
-                )
-                .await;
-        }
-        Err(AppError::bad_request("Unknown audio operation."))
     }
 
     async fn message(&self, ws: WebSocket, message: WebSocketIncomingMessage) -> Result<()> {
@@ -603,6 +439,10 @@ impl WalkieGroupObject {
             return Ok(());
         };
         let mut room = self.load().await?;
+        // An event already received from this socket proves it is still alive.
+        if let Some(client) = room.clients.get_mut(&a.connection_id) {
+            client.last_seen = now();
+        }
         self.prune(&mut room).await?;
         let Some(c) = room.clients.get_mut(&a.connection_id) else {
             return Ok(());
@@ -646,7 +486,7 @@ impl WalkieGroupObject {
         self.save(&room).await?;
         self.broadcast(&room).await?;
         if !room.cleanup.is_empty() {
-            self.cleanup(&mut room).await?;
+            self.save(&room).await?;
         }
         Ok(())
     }
@@ -656,7 +496,7 @@ impl WalkieGroupObject {
             let mut room = self.load().await?;
             self.remove(&mut room, &a.connection_id, "Disconnected.");
             self.broadcast(&room).await?;
-            self.cleanup(&mut room).await?;
+            self.save(&room).await?;
         }
         Ok(())
     }
@@ -670,6 +510,9 @@ impl DurableObject for WalkieGroupObject {
         }
     }
     async fn fetch(&self, req: Request) -> Result<Response> {
+        if req.path() == "/media" {
+            return self.fetch_inner(req).await;
+        }
         self.state
             .block_concurrency_while({
                 let room = self.clone();
@@ -719,10 +562,14 @@ impl DurableObject for WalkieGroupObject {
                     let mut room = coordinator.load().await?;
                     coordinator.prune_state(&mut room).await?;
                     coordinator.broadcast(&room).await?;
-                    coordinator.cleanup(&mut room).await?;
+                    coordinator.save(&room).await?;
                     Response::ok("ok")
                 }
             })
+            .await?;
+        self.drain_cleanup()
             .await
+            .map_err(|error| Error::RustError(error.message))?;
+        Response::ok("ok")
     }
 }

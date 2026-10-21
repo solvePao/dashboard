@@ -21,7 +21,7 @@ import {
   X,
 } from "@lucide/vue";
 import type { DeviceItem } from "../types/device";
-import { asStockConfig, asWeatherConfig, type DeviceWidget, type StockSymbolItem, type WeatherCityItem } from "../types/widget";
+import { asStockConfig, asWeatherConfig, type DeviceWidget, type StockPeriod, type StockSymbolItem, type WeatherCityItem } from "../types/widget";
 import type { CityOption } from "../services/geocodingApi";
 import { getWidgetDefinition, WIDGET_REGISTRY } from "../widgets/registry";
 import { useAuth } from "../composables/useAuth";
@@ -54,11 +54,28 @@ const {
   removeWeatherCity,
   addStockSymbol,
   removeStockSymbol,
+  setStockPeriod,
   setWidgetEnabled,
   removeWidget,
-  clearWidgets,
+  clearScreenWidgets,
   setWalkieTalkieGroup,
 } = widgetsApi;
+
+const screenWidgets = computed(() =>
+  widgets.value.filter((w) => w.widget_key !== "walkie_talkie")
+);
+
+const walkieWidget = computed(() =>
+  widgets.value.find((w) => w.widget_key === "walkie_talkie")
+);
+
+async function handleToggleWalkie(): Promise<void> {
+  if (walkieWidget.value) {
+    await setWidgetEnabled("walkie_talkie", !walkieWidget.value.enabled).catch(() => undefined);
+  } else {
+    await setWalkieTalkieGroup(null).catch(() => undefined);
+  }
+}
 
 const revoking = ref(false);
 const revokeError = ref<string | null>(null);
@@ -88,6 +105,22 @@ function stockSymbols(widget: DeviceWidget): StockSymbolItem[] {
   return config?.symbols || [];
 }
 
+function stockPeriod(widget: DeviceWidget): StockPeriod {
+  const config = asStockConfig(widget);
+  return config?.period || "1D";
+}
+
+const STOCK_PERIOD_OPTIONS: { value: StockPeriod; label: string }[] = [
+  { value: "1D", label: "1D (1 Day)" },
+  { value: "5D", label: "5D (5 Days)" },
+  { value: "1W", label: "1W (1 Week)" },
+  { value: "1M", label: "1M (1 Month)" },
+  { value: "3M", label: "3M (3 Months)" },
+  { value: "6M", label: "6M (6 Months)" },
+  { value: "YTD", label: "YTD (Year to Date)" },
+  { value: "1Y", label: "1Y (1 Year)" },
+];
+
 function stockSummary(widget: DeviceWidget): string {
   const symbols = stockSymbols(widget);
   if (symbols.length === 0) return "No symbols added — click + Add Symbol";
@@ -116,18 +149,19 @@ async function handleRevoke(): Promise<void> {
 }
 
 function handlePickNone(): void {
-  if (widgets.value.length === 0) return;
-  void clearWidgets().catch(() => undefined);
+  if (screenWidgets.value.length === 0) return;
+  void clearScreenWidgets().catch(() => undefined);
 }
 
 function handlePickWidget(key: string): void {
-  if (key === "walkie_talkie") {
-    if (widgets.value.some(w => w.widget_key === key)) return;
-    void setWalkieTalkieGroup(null).catch(() => undefined);
-  } else if (key === "weather") {
+  if (key === "weather") {
     showCityModal.value = true;
   } else if (key === "stock") {
     showStockModal.value = true;
+  } else if (key === "walkie_talkie") {
+    if (!walkieWidget.value?.enabled) {
+      void handleToggleWalkie();
+    }
   }
 }
 
@@ -176,12 +210,12 @@ watch(
 </script>
 
 <template>
-  <div class="fe-manage-page space-y-6 animate-in fade-in-50 duration-200">
+  <div class="fe-manage-page space-y-5 sm:space-y-6 animate-in fade-in-50 duration-200">
     <!-- Navigation row -->
     <div class="fe-manage-nav flex items-center justify-between">
       <button
         type="button"
-        class="fe-manage-back-btn inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3.5 py-2 text-xs font-medium text-foreground shadow-xs transition hover:bg-accent"
+        class="fe-manage-back-btn inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-xs font-semibold text-foreground shadow-xs transition hover:bg-accent active:scale-[0.98]"
         @click="emit('back')"
       >
         <ArrowLeft class="h-4 w-4 text-muted-foreground" />
@@ -190,21 +224,21 @@ watch(
     </div>
 
     <!-- Device Details Card -->
-    <div class="fe-manage-header-card rounded-xl border border-border bg-card p-5 text-card-foreground shadow-sm sm:p-6">
+    <div class="fe-manage-header-card rounded-xl border border-border bg-card p-4 text-card-foreground shadow-sm sm:rounded-2xl sm:p-6">
       <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div class="flex min-w-0 flex-1 items-start gap-3.5">
+        <div class="flex min-w-0 flex-1 items-start gap-3 sm:gap-3.5">
           <span
-            class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+            class="flex h-10 w-10 sm:h-11 sm:w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
           >
-            <ShieldCheck class="h-6 w-6" />
+            <ShieldCheck class="h-5 w-5 sm:h-6 sm:w-6" />
           </span>
-          <div class="min-w-0">
-            <div class="flex flex-wrap items-center gap-2.5">
-              <h1 class="break-words [overflow-wrap:anywhere] text-lg font-semibold text-foreground">
+          <div class="min-w-0 flex-1">
+            <div class="flex flex-wrap items-center gap-2">
+              <h1 class="break-words [overflow-wrap:anywhere] text-base sm:text-lg font-bold text-foreground">
                 {{ device.device_name }}
               </h1>
               <span
-                class="rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
+                class="rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
               >
                 Authorized
               </span>
@@ -217,12 +251,12 @@ watch(
 
         <button
           type="button"
-          class="inline-flex shrink-0 items-center justify-center gap-1.5 self-start sm:self-center rounded-lg border border-border px-3.5 py-2 text-xs font-medium text-destructive transition hover:bg-destructive/10 disabled:opacity-60"
+          class="inline-flex min-h-[44px] w-full sm:w-auto shrink-0 items-center justify-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-2.5 text-xs font-semibold text-destructive transition hover:bg-destructive/15 active:scale-[0.98] disabled:opacity-60"
           :disabled="revoking"
           @click="handleRevoke"
         >
-          <Loader2 v-if="revoking" class="h-3.5 w-3.5 animate-spin" />
-          <Trash2 v-else class="h-3.5 w-3.5" />
+          <Loader2 v-if="revoking" class="h-4 w-4 animate-spin" />
+          <Trash2 v-else class="h-4 w-4" />
           <span>Revoke Device</span>
         </button>
       </div>
@@ -238,9 +272,22 @@ watch(
 
     <p v-if="widgetsNotice" role="status" class="rounded-xl border border-border bg-muted p-3 text-xs text-muted-foreground">{{ widgetsNotice }}</p>
 
+    <!-- Walkie-talkie Feature Card (only shown when enabled) -->
+    <WalkieTalkieSettings
+      v-if="walkieWidget && walkieWidget.enabled"
+      :key="device.token"
+      :device-token="device.token"
+      :group-id="typeof walkieWidget?.config?.group_id === 'string' ? walkieWidget.config.group_id : null"
+      :enabled="walkieWidget ? walkieWidget.enabled : false"
+      :saving="saving"
+      @toggle="handleToggleWalkie"
+      @assigned="setWalkieTalkieGroup"
+      @changed="load"
+    />
+
     <!-- Widgets Configuration Card -->
-    <div class="fe-manage-widgets-card rounded-xl border border-border bg-card p-5 text-card-foreground shadow-sm sm:p-6">
-      <div class="flex flex-wrap items-center justify-between gap-4 border-b border-border/80 pb-4">
+    <div class="fe-manage-widgets-card rounded-xl border border-border bg-card p-4 text-card-foreground shadow-sm sm:rounded-2xl sm:p-6">
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-border/80 pb-4">
         <div>
           <h2 class="text-base font-semibold leading-tight text-foreground">Device Widgets</h2>
           <p class="mt-0.5 text-xs text-muted-foreground">
@@ -252,9 +299,9 @@ watch(
           <DropdownMenuTrigger as-child>
             <button
               type="button"
-              class="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground shadow-xs transition hover:bg-primary/90"
+              class="inline-flex min-h-[42px] sm:min-h-0 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 sm:py-1.5 sm:px-3 text-xs font-semibold text-primary-foreground shadow-xs transition hover:bg-primary/90 active:scale-[0.98]"
             >
-              <Plus class="h-3.5 w-3.5" />
+              <Plus class="h-4 w-4 sm:h-3.5 sm:w-3.5" />
               <span>Add widget</span>
               <ChevronDown class="h-3.5 w-3.5 opacity-80" />
             </button>
@@ -262,12 +309,12 @@ watch(
           <DropdownMenuPortal>
             <DropdownMenuContent
               :side-offset="8"
-              :collision-padding="16"
+              :collision-padding="12"
               align="end"
-              class="z-50 max-h-[var(--reka-dropdown-menu-content-available-height)] max-w-[calc(100vw-2rem)] overflow-y-auto w-64 rounded-xl border border-border bg-popover p-1.5 text-popover-foreground shadow-md outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
+              class="z-50 max-h-[var(--reka-dropdown-menu-content-available-height)] max-w-[calc(100vw-1.5rem)] overflow-y-auto w-64 rounded-xl border border-border bg-popover p-1.5 text-popover-foreground shadow-xl outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
             >
               <DropdownMenuItem
-                class="flex cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
+                class="flex min-h-[40px] cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
                 @select="handlePickNone"
               >
                 <Ban class="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -275,12 +322,12 @@ watch(
                   <span class="block font-medium">None</span>
                   <span class="block truncate text-xs text-muted-foreground">Show nothing</span>
                 </span>
-                <Check v-if="widgets.length === 0" class="h-4 w-4 shrink-0 text-primary" />
+                <Check v-if="screenWidgets.length === 0" class="h-4 w-4 shrink-0 text-primary" />
               </DropdownMenuItem>
               <DropdownMenuItem
                 v-for="entry in WIDGET_REGISTRY"
                 :key="entry.key"
-                class="flex cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
+                class="flex min-h-[40px] cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
                 @select="handlePickWidget(entry.key)"
               >
                 <component :is="entry.icon" class="h-4 w-4 shrink-0 text-primary" />
@@ -289,7 +336,7 @@ watch(
                   <span class="block truncate text-xs text-muted-foreground">{{ entry.description }}</span>
                 </span>
                 <Check
-                  v-if="widgets.some((w) => w.widget_key === entry.key)"
+                  v-if="screenWidgets.some((w) => w.widget_key === entry.key) || (entry.key === 'walkie_talkie' && walkieWidget && walkieWidget.enabled)"
                   class="h-4 w-4 shrink-0 text-primary"
                 />
               </DropdownMenuItem>
@@ -304,7 +351,7 @@ watch(
       </div>
 
       <div
-        v-else-if="widgets.length === 0"
+        v-else-if="screenWidgets.length === 0"
         class="mt-6 rounded-xl border border-dashed border-border p-8 text-center text-xs text-muted-foreground"
       >
         <p class="font-medium text-foreground text-sm">No widgets active</p>
@@ -313,7 +360,7 @@ watch(
 
       <ul v-else class="mt-4 space-y-2.5">
         <li
-          v-for="widget in widgets"
+          v-for="widget in screenWidgets"
           :key="widget.widget_key"
           class="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition hover:border-border/90"
         >
@@ -333,7 +380,7 @@ watch(
               </p>
             </div>
 
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 shrink-0">
               <button
                 type="button"
                 role="switch"
@@ -351,7 +398,7 @@ watch(
               </button>
               <button
                 type="button"
-                class="rounded-lg p-2 text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive"
+                class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive active:scale-95"
                 :aria-label="`Remove ${getWidgetDefinition(widget.widget_key)?.label ?? widget.widget_key}`"
                 :disabled="saving"
                 @click="handleRemove(widget)"
@@ -361,18 +408,6 @@ watch(
             </div>
           </div>
 
-          <!-- Cities Chips for Weather Widget -->
-          <WalkieTalkieSettings
-            v-if="widget.widget_key === 'walkie_talkie'"
-            :key="device.token"
-            :device-token="device.token"
-            :group-id="typeof widget.config.group_id === 'string' ? widget.config.group_id : null"
-            :enabled="widget.enabled"
-            :saving="saving"
-            @assigned="setWalkieTalkieGroup"
-            @changed="load"
-          />
-
           <div
             v-if="widget.widget_key === 'weather'"
             class="border-t border-border/60 pt-3"
@@ -381,7 +416,7 @@ watch(
               <span class="text-xs font-medium text-muted-foreground">Configured Cities</span>
               <button
                 type="button"
-                class="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary hover:bg-primary/20 transition disabled:opacity-50"
+                class="inline-flex min-h-[36px] sm:min-h-0 items-center gap-1 rounded-md bg-primary/10 px-3 py-1.5 sm:px-2.5 sm:py-1 text-xs font-semibold text-primary hover:bg-primary/20 transition disabled:opacity-50 active:scale-[0.98]"
                 :disabled="saving"
                 @click="showCityModal = true"
               >
@@ -394,18 +429,18 @@ watch(
               <span
                 v-for="(cityItem, idx) in weatherCities(widget)"
                 :key="`${cityItem.latitude}-${cityItem.longitude}-${idx}`"
-                class="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-foreground shadow-2xs"
+                class="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border bg-muted/60 pl-2.5 pr-1 py-1 text-xs font-medium text-foreground shadow-2xs"
               >
-                <MapPin class="h-3 w-3 text-primary shrink-0" />
+                <MapPin class="h-3.5 w-3.5 text-primary shrink-0" />
                 <span class="truncate max-w-[150px]">{{ cityItem.city }}{{ cityItem.country ? `, ${cityItem.country}` : '' }}</span>
                 <button
                   type="button"
-                  class="ml-0.5 shrink-0 rounded-sm p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition"
+                  class="ml-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/15 hover:text-destructive transition active:scale-90"
                   aria-label="Remove city"
                   :disabled="saving"
                   @click="handleRemoveCity(idx)"
                 >
-                  <X class="h-3 w-3" />
+                  <X class="h-3.5 w-3.5" />
                 </button>
               </span>
             </div>
@@ -417,15 +452,34 @@ watch(
           <!-- Symbols Chips for Stock Widget -->
           <div
             v-if="widget.widget_key === 'stock'"
-            class="border-t border-border/60 pt-3"
+            class="border-t border-border/60 pt-3 space-y-3"
           >
+            <!-- Default Performance Period Setting -->
+            <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/30 p-2.5">
+              <div>
+                <p class="text-xs font-semibold text-foreground">Performance Period</p>
+                <p class="text-[11px] text-muted-foreground">Sets the 1D / 5D timeframe on mobile</p>
+              </div>
+              <select
+                :value="stockPeriod(widget)"
+                :disabled="saving"
+                class="rounded-md border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground transition hover:border-primary/50 focus:border-primary focus:outline-none cursor-pointer disabled:opacity-50"
+                aria-label="Stock performance period"
+                @change="setStockPeriod(($event.target as HTMLSelectElement).value as StockPeriod)"
+              >
+                <option v-for="opt in STOCK_PERIOD_OPTIONS" :key="opt.value" :value="opt.value">
+                  {{ opt.label }}
+                </option>
+              </select>
+            </div>
+
             <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
               <span class="text-xs font-medium text-muted-foreground">
                 Configured Watchlist ({{ stockSymbols(widget).length }}/4)
               </span>
               <button
                 type="button"
-                class="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary hover:bg-primary/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                class="inline-flex min-h-[36px] sm:min-h-0 items-center gap-1 rounded-md bg-primary/10 px-3 py-1.5 sm:px-2.5 sm:py-1 text-xs font-semibold text-primary hover:bg-primary/20 transition disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
                 :disabled="saving || stockSymbols(widget).length >= 4"
                 :title="stockSymbols(widget).length >= 4 ? 'Maximum 4 symbols reached' : 'Add Stock Symbol'"
                 @click="showStockModal = true"
@@ -442,9 +496,9 @@ watch(
               <span
                 v-for="(symItem, idx) in stockSymbols(widget)"
                 :key="`${symItem.symbol}-${idx}`"
-                class="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-foreground shadow-2xs"
+                class="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border bg-muted/60 pl-2.5 pr-1 py-1 text-xs font-medium text-foreground shadow-2xs"
               >
-                <TrendingUp class="h-3 w-3 text-primary shrink-0" />
+                <TrendingUp class="h-3.5 w-3.5 text-primary shrink-0" />
                 <span
                   v-if="symItem.exchange || (symItem.ticker && symItem.ticker.includes(':'))"
                   class="text-[9px] font-mono uppercase px-1.5 py-0.5 rounded bg-primary/10 border border-primary/20 text-primary font-bold shrink-0 leading-none"
@@ -461,12 +515,12 @@ watch(
                 <span v-if="symItem.name" class="text-muted-foreground truncate max-w-[120px] text-[11px]">({{ symItem.name }})</span>
                 <button
                   type="button"
-                  class="ml-0.5 shrink-0 rounded-sm p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition"
+                  class="ml-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/15 hover:text-destructive transition active:scale-90"
                   aria-label="Remove symbol"
                   :disabled="saving"
                   @click="handleRemoveStock(idx)"
                 >
-                  <X class="h-3 w-3" />
+                  <X class="h-3.5 w-3.5" />
                 </button>
               </span>
             </div>

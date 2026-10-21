@@ -58,11 +58,13 @@ frontend/
     │   ├── UserProfileCard.vue    # Welcome card with user photo/initial and email
     │   ├── SignInPrompt.vue       # Unauthenticated callout banner
     │   ├── ConnectedDevicesList.vue# Container for paired mobile devices list
-    │   ├── DeviceItemRow.vue      # Individual paired device row with revoke action
-    │   ├── DeviceManageView.vue   # Device widget management sheet with Weather and Stock configurations
+    │   ├── DeviceItemRow.vue      # Individual paired device row with manage and re-pair actions
+    │   ├── DeviceManageView.vue   # Mobile phone configuration view with device details, Walkie-talkie feature card, and screen widgets (Weather cities, Stock watchlist & performance period)
+    │   ├── WalkieTalkieSettings.vue# Dedicated feature card for mobile phone walkie-talkie groups, code admission, and members
     │   ├── CityPickerModal.vue    # Search and select city modal for Weather widget
     │   ├── StockPickerModal.vue   # Freeform ticker input & live verification modal for Stock widget
     │   ├── AddDeviceModal.vue     # Dialog for pairing new mobile devices
+    │   ├── RepairDeviceModal.vue  # Dialog for re-pairing and restoring existing mobile devices
     │   ├── DeviceCodeForm.vue     # 6-character pairing code input form
     │   ├── DeviceCameraScanner.vue# Webcam QR scanner frame with status feedback
     │   ├── GoogleSignInButton.vue # Wrapper rendering Google Identity Services button
@@ -181,14 +183,18 @@ flowchart TD
    - **`useTheme.ts`**: Manages light, dark, and system theme preferences, synchronizing changes across tabs via the `storage` event and toggling the `dark` class on `document.documentElement`.
 
 5. **`src/components/` (UI Presentation Layer)**
-   - **`App.vue`**: Declarative shell displaying `TopNavbar`, `UserProfileCard` or `SignInPrompt`, `ConnectedDevicesList`, and `AppFooter`.
-   - **`AppFooter.vue`**: Subtle static footer presenting the build git commit version `v(...)`.
-   - **`AddDeviceModal.vue`**: Clean modal container switching between `DeviceCodeForm` (manual 6-char input) and `DeviceCameraScanner` (webcam QR scan).
-   - **`ConnectedDevicesList.vue`**: Displays connected devices using `DeviceItemRow` for each device.
+   - **`App.vue`**: Declarative shell displaying `TopNavbar`, `UserProfileCard` or `WelcomePage`, `ConnectedDevicesList`, and `AppFooter`. Handles viewport safe-areas and responsive padding.
+   - **`AppFooter.vue`**: Subtle static footer presenting the build git commit version with bottom safe-area offset (`pb-safe`).
+   - **`AppDialog.vue`**: Universal dialog shell that automatically renders as a native **Bottom Sheet** on phone viewports (`< sm`, with safe-area bottom padding and drag handle) and a centered modal dialog on desktop (`>= sm`).
+   - **`AddDeviceModal.vue` / `RepairDeviceModal.vue`**: Dialogs for pairing new devices and re-authorizing existing devices with 44px touch targets.
+   - **`ConnectedDevicesList.vue`**: Container for paired mobile devices with responsive header layout.
+   - **`DeviceItemRow.vue`**: Device card featuring 2-button bottom action grid on mobile screens for thumb-friendly Re-pair and Manage workflows.
+   - **`DeviceManageView.vue`**: Manage sheet with touch-friendly widget controls, full-width mobile revoke button, and responsive chip tags.
+   - **`WalkieTalkieSettings.vue`**: Dedicated Walkie-talkie configuration card featuring responsive mobile cards with $\ge 44\text{px}$ touch action bars, 6-box segmented PIN input with auto-advance and paste support, sticky-header bottom sheets with safe-area padding (`pb-safe`), and inline member removal confirmation.
 
 6. **`src/styles/` (Modular Styling)**
-   - **`theme.css`**: Tailwind CSS v4 `@theme inline` palette mappings, `:root` light mode variables, and `.dark` mode variables.
-   - **`components.css`**: Reusable component classes (`.nav-link`, `.nav-link-active`).
+   - **`theme.css`**: Tailwind CSS v4 `@theme inline` palette mappings, `:root` light mode variables, `.dark` mode variables, and safe-area inset custom properties (`--safe-area-top`, `--safe-area-bottom`, `--safe-area-left`, `--safe-area-right`).
+   - **`components.css`**: Reusable component classes (`.nav-link`, `.nav-link-active`, `.pb-safe`, `.pt-safe`, `.touch-target`, `.no-scrollbar`).
    - **`style.css`**: Core entry point importing Google Fonts, Tailwind, animate-css, and child stylesheets.
 
 ---
@@ -216,6 +222,17 @@ flowchart TD
 3. Modal calls `useAuth().authorizeDevice(code, deviceName)`.
 4. `deviceApi.authorizeDeviceApi` posts the code with the user's Bearer token to `/api/auth/device/authorize`.
 5. On success, `useDevices.fetchDevices` reloads the list, displaying the newly paired device.
+
+### Device Re-pairing Flow
+1. User clicks **Re-pair** on an expired or unlinked device row.
+2. `RepairDeviceModal` opens with direct code input or QR scanner.
+3. As soon as a 6-character code (or 32-character session ID) is entered, auto-submission triggers `reauthorizeDevice` immediately, while keeping the explicit submit button available below for manual triggering.
+4. On success, `useDevices.fetchDevices` updates device status and the modal automatically dismisses.
+
+### Widget & Mobile Viewport Enhancements
+- **Walkie-talkie Widget Discovery**: Walkie-talkie is registered in `WIDGET_REGISTRY` (`src/widgets/registry.ts`) and is optionally enabled from the "Add widget" dropdown in `DeviceManageView.vue` rather than being displayed on every device by default.
+- **Mobile Viewport Scrolling**: Mobile layout uses dynamic viewport height units (`100dvh`), `pb-safe`, and generous bottom margin (`pb-28 sm:pb-10`) to ensure content is fully scrollable past mobile browser bars.
+- **Upward Slide Dialogs**: `AppDialog.vue` renders mobile sheets with native upward slide animations (`slide-in-from-bottom` / `slide-out-to-bottom`) and blurred overlays.
 
 ---
 

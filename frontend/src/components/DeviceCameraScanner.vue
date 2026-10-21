@@ -78,7 +78,7 @@ defineExpose({
   <div class="fe-scanner-root mt-5 flex flex-col items-center">
     <div
       v-if="cameraStarting"
-      class="fe-scanner-starting flex h-56 w-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-muted/40 text-xs text-muted-foreground"
+      class="fe-scanner-starting flex h-56 w-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-muted/40 text-xs text-muted-foreground animate-in fade-in-0 duration-150"
     >
       <Loader2 class="fe-scanner-starting-icon h-6 w-6 animate-spin text-primary" />
       <span class="fe-scanner-starting-text">Starting webcam...</span>
@@ -86,7 +86,7 @@ defineExpose({
 
     <div
       v-if="cameraError"
-      class="fe-scanner-error rounded-xl border border-destructive/20 bg-destructive/10 p-3 text-xs text-destructive text-center mb-3"
+      class="fe-scanner-error rounded-xl border border-destructive/20 bg-destructive/10 p-3 text-xs text-destructive text-center mb-3 animate-in fade-in-0 duration-150"
     >
       {{ cameraError }}
     </div>

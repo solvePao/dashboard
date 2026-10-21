@@ -781,14 +781,22 @@ onBeforeUnmount(() => {
                 </div>
               </div>
 
-              <div class="text-right text-xs space-y-1">
-                <div class="inline-flex items-center gap-1 rounded-full bg-white/15 px-2.5 py-0.5 text-[11px] font-medium backdrop-blur-xs">
-                  <Thermometer class="h-3 w-3 text-white/80" />
+              <div class="text-right flex flex-col items-end gap-1.5 shrink-0">
+                <div class="inline-flex items-center gap-1.5 rounded-full bg-white/20 border border-white/25 px-3 py-1 text-xs font-semibold backdrop-blur-xs shadow-xs text-white">
+                  <Thermometer class="h-3.5 w-3.5 text-white/90" />
                   <span>Feels {{ Math.round(displayWeather.apparentTemperature) }}°</span>
                 </div>
-                <p class="text-[11px] font-medium text-white/85">
-                  H: {{ Math.round(displayWeather.highToday) }}° · L: {{ Math.round(displayWeather.lowToday) }}°
-                </p>
+                <div class="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-white tracking-wide pr-0.5 drop-shadow-xs">
+                  <span class="inline-flex items-center gap-0.5 text-white/95">
+                    <span class="text-[10px] sm:text-xs font-semibold opacity-75">H:</span>
+                    <span>{{ Math.round(displayWeather.highToday) }}°</span>
+                  </span>
+                  <span class="opacity-40">·</span>
+                  <span class="inline-flex items-center gap-0.5 text-white/95">
+                    <span class="text-[10px] sm:text-xs font-semibold opacity-75">L:</span>
+                    <span>{{ Math.round(displayWeather.lowToday) }}°</span>
+                  </span>
+                </div>
               </div>
             </div>
 

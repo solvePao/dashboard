@@ -4,7 +4,7 @@ import { ApiError } from "../api/client";
 import { fetchWidgetsApi, saveWidgetsApi } from "../api/widgetApi";
 import { subscribeHubEvents } from "./useDevices";
 import { useAuth } from "./useAuth";
-import type { DeviceWidget, StockSymbolItem, WeatherCityItem, WeatherWidgetConfig } from "../types/widget";
+import type { DeviceWidget, StockPeriod, StockSymbolItem, WeatherCityItem, WeatherWidgetConfig } from "../types/widget";
 import { asStockConfig, asWeatherConfig } from "../types/widget";
 
 /**
@@ -167,7 +167,10 @@ export function useDeviceWidgets(deviceToken: string) {
     next.push({
       widget_key: "stock",
       enabled: existing ? existing.enabled : true,
-      config: { symbols: currentSymbols },
+      config: {
+        symbols: currentSymbols,
+        period: parsed?.period,
+      },
     });
     return persist(next);
   }
@@ -186,7 +189,28 @@ export function useDeviceWidgets(deviceToken: string) {
     next.push({
       widget_key: "stock",
       enabled: existing.enabled,
-      config: { symbols: currentSymbols },
+      config: {
+        symbols: currentSymbols,
+        period: parsed?.period,
+      },
+    });
+    return persist(next);
+  }
+
+  /** Sets the default performance period (e.g. 1D, 5D, 1M, etc.) for the stock widget. */
+  async function setStockPeriod(period: StockPeriod): Promise<boolean> {
+    const existing = widgets.value.find((w) => w.widget_key === "stock");
+    const parsed = existing ? asStockConfig(existing) : null;
+    const currentSymbols = parsed ? [...parsed.symbols] : [];
+
+    const next = widgets.value.filter((w) => w.widget_key !== "stock");
+    next.push({
+      widget_key: "stock",
+      enabled: existing ? existing.enabled : true,
+      config: {
+        symbols: currentSymbols,
+        period,
+      },
     });
     return persist(next);
   }
@@ -202,13 +226,19 @@ export function useDeviceWidgets(deviceToken: string) {
     return persist(widgets.value.filter((w) => w.widget_key !== key));
   }
 
-  /** Clears every widget (the dropdown's "None" choice). */
   async function setWalkieTalkieGroup(groupId: string | null): Promise<boolean> {
     const next = widgets.value.filter(w => w.widget_key !== "walkie_talkie");
     next.push({ widget_key: "walkie_talkie", enabled: true, config: { group_id: groupId } });
     return persist(next);
   }
 
+  /** Clears screen widgets (e.g. weather, stock) while preserving phone features like walkie_talkie. */
+  async function clearScreenWidgets(): Promise<boolean> {
+    const next = widgets.value.filter(w => w.widget_key === "walkie_talkie");
+    return persist(next);
+  }
+
+  /** Clears every widget (the dropdown's "None" choice). */
   async function clearWidgets(): Promise<boolean> {
     return persist([]);
   }
@@ -232,9 +262,11 @@ export function useDeviceWidgets(deviceToken: string) {
     removeWeatherCity,
     addStockSymbol,
     removeStockSymbol,
+    setStockPeriod,
     setWidgetEnabled,
     removeWidget,
     clearWidgets,
+    clearScreenWidgets,
     setWalkieTalkieGroup,
   };
 }

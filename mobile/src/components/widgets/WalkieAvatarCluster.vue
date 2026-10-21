@@ -32,7 +32,7 @@ defineProps<{
           <WalkieParticipantAvatar
             :name="member.first_name || member.name"
             :picture-url="member.picture_url"
-            size-class="h-9 w-9 text-xs"
+            size-class="h-8 w-8 text-[11px]"
             :class="['transition-opacity duration-200', !member.online ? 'opacity-40' : '']"
           />
         </div>

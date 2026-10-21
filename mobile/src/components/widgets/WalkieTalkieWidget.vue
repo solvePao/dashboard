@@ -40,10 +40,10 @@ const currentSpeaker = computed(() => {
     aria-label="Walkie-talkie"
   >
     <!-- Header -->
-    <header class="flex shrink-0 items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
-      <div class="flex min-w-0 items-center gap-2.5">
-        <div class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-          <Radio class="h-4 w-4" />
+    <header class="flex shrink-0 items-center justify-between gap-2 border-b border-border/70 px-3 py-2">
+      <div class="flex min-w-0 items-center gap-2">
+        <div class="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <Radio class="h-3.5 w-3.5" />
           <span
             v-if="active"
             class="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-card"
@@ -54,33 +54,33 @@ const currentSpeaker = computed(() => {
           />
         </div>
         <div class="min-w-0">
-          <p class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Walkie-talkie</p>
-          <h2 class="truncate text-sm font-semibold tracking-tight">{{ state.groupName }}</h2>
+          <p class="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Walkie-talkie</p>
+          <h2 class="truncate text-xs font-semibold tracking-tight">{{ state.groupName }}</h2>
         </div>
       </div>
 
-      <div class="flex items-center gap-1.5 shrink-0">
+      <div class="flex items-center gap-1 shrink-0">
         <!-- Audio pause button -->
         <button
           v-if="active || connecting"
           type="button"
-          class="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground active:scale-95"
+          class="flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground active:scale-95"
           aria-label="Pause walkie-talkie audio"
           title="Pause audio"
           @click="pause()"
         >
-          <Pause class="h-4 w-4" />
+          <Pause class="h-3.5 w-3.5" />
         </button>
 
         <!-- Pairing code modal trigger -->
         <button
           type="button"
-          class="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground active:scale-95"
+          class="flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground active:scale-95"
           aria-label="Device pairing code"
           title="Add this device to a group"
           @click="codeSheetOpen = true"
         >
-          <KeyRound class="h-4 w-4" />
+          <KeyRound class="h-3.5 w-3.5" />
         </button>
       </div>
     </header>
@@ -127,10 +127,10 @@ const currentSpeaker = computed(() => {
       </div>
     </div>
 
-    <!-- Main scrollable content -->
-    <div class="flex flex-1 min-h-0 flex-col items-center justify-between px-4 py-3 overflow-y-auto">
+    <!-- Main content (zero-scroll compact layout) -->
+    <div class="flex flex-1 min-h-0 flex-col items-center justify-between px-3 py-2 overflow-hidden">
       <!-- Top section: Members & Speaker status -->
-      <div class="flex flex-col items-center gap-2 w-full pt-1">
+      <div class="flex flex-col items-center gap-1 w-full shrink-0">
         <template v-if="groupId">
           <!-- Member Avatar Cluster -->
           <WalkieAvatarCluster
@@ -139,10 +139,10 @@ const currentSpeaker = computed(() => {
           />
 
           <!-- Live Speaker / State Subtitle -->
-          <div class="h-5 flex items-center justify-center text-center">
+          <div class="h-4 flex items-center justify-center text-center">
             <span
               v-if="currentSpeaker"
-              class="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-500 animate-pulse"
+              class="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-500 animate-pulse"
             >
               <span class="h-1.5 w-1.5 rounded-full bg-emerald-500" />
               {{ currentSpeaker.first_name || currentSpeaker.name }} is speaking
@@ -161,14 +161,14 @@ const currentSpeaker = computed(() => {
 
         <!-- No group state -->
         <template v-else>
-          <div class="rounded-xl border border-dashed border-border bg-muted/15 p-4 text-center max-w-xs mt-2">
+          <div class="rounded-xl border border-dashed border-border bg-muted/15 p-3 text-center max-w-xs mt-1">
             <p class="text-xs font-semibold text-foreground">No group assigned</p>
-            <p class="mt-1 text-[11px] text-muted-foreground leading-relaxed">
-              Generate a device code and share it with a group owner to be added to a walkie-talkie group.
+            <p class="mt-0.5 text-[11px] text-muted-foreground leading-snug">
+              Share your device code with a group owner to join a walkie group.
             </p>
             <button
               type="button"
-              class="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition shadow-sm active:scale-95"
+              class="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition shadow-sm active:scale-95"
               @click="codeSheetOpen = true"
             >
               <KeyRound class="h-3.5 w-3.5" />
@@ -179,7 +179,7 @@ const currentSpeaker = computed(() => {
       </div>
 
       <!-- Center: PTT Button -->
-      <div class="my-auto py-2 flex flex-col items-center">
+      <div class="my-auto py-1 flex flex-col items-center shrink-0">
         <WalkiePTTButton
           :status="state.status"
           :active="active"
@@ -188,7 +188,7 @@ const currentSpeaker = computed(() => {
         />
 
         <!-- Status message line -->
-        <p class="mt-2 max-w-64 text-center text-xs text-muted-foreground" role="status" aria-live="polite">
+        <p class="mt-1 max-w-60 text-center text-[11px] text-muted-foreground" role="status" aria-live="polite">
           {{ state.message }}
         </p>
 
@@ -196,10 +196,10 @@ const currentSpeaker = computed(() => {
         <button
           v-if="!active && !connecting && groupId"
           type="button"
-          class="mt-3 inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-xs font-semibold text-primary-foreground shadow-md transition hover:bg-primary/90 active:scale-95"
-          @click="enable"
+          class="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-1.5 text-xs font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90 active:scale-95"
+          @click="enable()"
         >
-          <Volume2 class="h-4 w-4" />
+          <Volume2 class="h-3.5 w-3.5" />
           <span>Enable audio</span>
         </button>
 
@@ -207,26 +207,12 @@ const currentSpeaker = computed(() => {
         <button
           v-if="state.playbackBlocked"
           type="button"
-          class="mt-3 inline-flex items-center gap-2 rounded-xl border border-primary bg-primary/10 px-4 py-2 text-xs font-semibold text-primary transition hover:bg-primary/20 active:scale-95"
+          class="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-primary bg-primary/20 px-3.5 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary/30 active:scale-95 animate-pulse"
           @click="resumePlayback"
         >
-          <Volume2 class="h-4 w-4" />
-          <span>Tap to unmute speaker</span>
+          <Volume2 class="h-3.5 w-3.5" />
+          <span>Incoming audio · Tap to unmute</span>
         </button>
-      </div>
-
-      <!-- Bottom / Footer -->
-      <div class="w-full shrink-0 pt-2 border-t border-border/50 text-center">
-        <div class="flex items-center justify-between text-[10px] text-muted-foreground">
-          <span>{{ groupId ? 'Live PTT · no recordings' : 'Awaiting group assignment' }}</span>
-          <button
-            type="button"
-            class="text-[10px] font-medium text-muted-foreground hover:text-foreground underline underline-offset-2 transition"
-            @click="codeSheetOpen = true"
-          >
-            Pairing code
-          </button>
-        </div>
       </div>
     </div>
 

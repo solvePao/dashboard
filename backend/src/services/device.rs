@@ -221,6 +221,137 @@ impl DeviceService {
         }
     }
 
+    /// Reauthorizes a pending pairing session using an existing device token,
+    /// extending its expiration and preserving its configured widgets and memberships.
+    #[cfg(not(any(test, coverage)))]
+    pub async fn reauthorize_device(
+        db: &D1Database,
+        env: &Env,
+        user: &User,
+        target_token: &str,
+        code_or_session: &str,
+    ) -> AppResult<AuthorizeDeviceResponse> {
+        let client = DoPairingClient::from_env(env)?;
+        match DoHubNotifier::from_env(env) {
+            Ok(hub) => {
+                Self::reauthorize_device_and_notify_with(
+                    &D1Stores(db),
+                    &client,
+                    &hub,
+                    user,
+                    target_token,
+                    code_or_session,
+                )
+                .await
+            }
+            Err(_) => {
+                Self::reauthorize_device_and_notify_with(
+                    &D1Stores(db),
+                    &client,
+                    &NoNotify,
+                    user,
+                    target_token,
+                    code_or_session,
+                )
+                .await
+            }
+        }
+    }
+
+    pub async fn reauthorize_device_and_notify_with<S, C, H>(
+        store: &S,
+        client: &C,
+        hub_notifier: &H,
+        user: &User,
+        target_token: &str,
+        code_or_session: &str,
+    ) -> AppResult<AuthorizeDeviceResponse>
+    where
+        S: PairingStore + Sync,
+        C: PairingClient + Sync,
+        H: HubNotifier + Sync,
+    {
+        let result = Self::reauthorize_device_with(
+            store,
+            client,
+            user,
+            target_token,
+            code_or_session,
+        )
+        .await;
+        if result.is_ok() {
+            hub_notifier
+                .notify_hub(user.id, DeviceLifecycleKind::Authorized, Some(target_token))
+                .await;
+        }
+        result
+    }
+
+    pub async fn reauthorize_device_with<S, C>(
+        store: &S,
+        client: &C,
+        user: &User,
+        target_token: &str,
+        code_or_session: &str,
+    ) -> AppResult<AuthorizeDeviceResponse>
+    where
+        S: PairingStore + Sync,
+        C: PairingClient + Sync,
+    {
+        let trimmed_code = v::normalize_code_or_session(code_or_session)?;
+
+        let session_id = if utils::is_valid_session_id_hex(&trimmed_code) {
+            trimmed_code.clone()
+        } else {
+            match store.store_find_session_by_code(&trimmed_code).await? {
+                Some(row) => row.session_id,
+                None => {
+                    return Err(AppError::not_found(
+                        "Pending session not found or expired.",
+                    ))
+                }
+            }
+        };
+
+        let status = client
+            .client_status(&session_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("Pending session not found or expired."))?;
+        match status.status.as_str() {
+            "authorized" => {
+                return Err(AppError::new("Session was already authorized.", 409));
+            }
+            "pending" => {}
+            _ => {
+                return Err(AppError::not_found(
+                    "Pending session not found or expired.",
+                ));
+            }
+        }
+
+        let device = store
+            .store_get_device_token(user.id, target_token)
+            .await?
+            .ok_or_else(|| AppError::not_found("Device not found or does not belong to you."))?;
+
+        store.store_renew_device_token(user.id, target_token).await?;
+
+        match client.client_commit(&session_id, target_token, user).await {
+            Ok(true) => Ok(AuthorizeDeviceResponse {
+                status: "authorized".to_string(),
+                session_id,
+                device_name: device.device_name,
+                message: "Device successfully re-authorized.".to_string(),
+            }),
+            Ok(false) => {
+                Err(AppError::new("Session was already authorized.", 409))
+            }
+            Err(err) => {
+                Err(err)
+            }
+        }
+    }
+
     /// Fallback status read; the Durable Object is the source.
     #[cfg(not(any(test, coverage)))]
     pub async fn check_session(env: &Env, session_id: &str) -> AppResult<CheckSessionResponse> {

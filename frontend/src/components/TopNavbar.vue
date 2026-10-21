@@ -21,32 +21,31 @@ const showAddDevice = ref(false);
 </script>
 
 <template>
-  <header class="fe-topnav-header sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md">
+  <header class="fe-topnav-header sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md pt-safe">
     <div
-      class="fe-topnav-container mx-auto flex h-[var(--topbar-h)] w-full max-w-[var(--container-max)] items-center justify-between gap-3 px-4 sm:px-6"
+      class="fe-topnav-container mx-auto flex h-[var(--topbar-h)] w-full max-w-[var(--container-max)] items-center justify-between gap-2 px-3.5 sm:px-6"
     >
       <!-- Brand -->
-      <div class="fe-topnav-brand-wrap flex min-w-0 items-center gap-6">
-        <a href="#" class="fe-topnav-brand-link flex shrink-0 items-center gap-2.5" aria-label="Dashboard home">
+      <div class="fe-topnav-brand-wrap flex min-w-0 items-center gap-4 sm:gap-6">
+        <a href="#" class="fe-topnav-brand-link flex shrink-0 items-center gap-2 sm:gap-2.5" aria-label="Dashboard home">
           <span
-            class="fe-topnav-brand-icon flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground"
+            class="fe-topnav-brand-icon flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-xs"
           >
             <LayoutDashboard class="fe-topnav-brand-glyph h-4 w-4" aria-hidden="true" />
           </span>
           <span class="fe-topnav-brand-title text-[15px] font-semibold tracking-tight text-foreground">Dashboard</span>
         </a>
-
       </div>
 
       <!-- Account actions -->
-      <div class="fe-topnav-actions flex shrink-0 items-center gap-2">
+      <div class="fe-topnav-actions flex shrink-0 items-center gap-1.5 sm:gap-2">
         <ThemeToggle />
         <GoogleSignInButton v-if="!isLoggedIn" class="hidden sm:flex" />
 
         <template v-else>
           <button
             type="button"
-            class="fe-topnav-add-btn hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground shadow-xs transition hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            class="fe-topnav-add-btn hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground shadow-xs transition hover:bg-accent active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             @click="showAddDevice = true"
           >
             <Smartphone class="fe-topnav-add-btn-icon h-3.5 w-3.5 text-primary" />
@@ -58,7 +57,7 @@ const showAddDevice = ref(false);
               <button
                 type="button"
                 aria-label="Profile menu"
-                class="fe-topnav-profile-trigger flex items-center gap-1.5 rounded-full py-0.5 pl-0.5 pr-1.5 transition hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+                class="fe-topnav-profile-trigger flex items-center gap-1 rounded-full p-1 transition hover:bg-accent active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
               >
                 <span
                   class="fe-topnav-avatar-wrap flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border border-border bg-muted"
@@ -81,11 +80,11 @@ const showAddDevice = ref(false);
             <DropdownMenuPortal>
               <DropdownMenuContent
                 :side-offset="8"
-                :collision-padding="16"
+                :collision-padding="12"
                 align="end"
-                class="fe-topnav-profile-menu z-50 max-h-[var(--reka-dropdown-menu-content-available-height)] max-w-[calc(100vw-2rem)] overflow-y-auto w-64 rounded-xl border border-border bg-popover p-1.5 text-popover-foreground shadow-md outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
+                class="fe-topnav-profile-menu z-50 max-h-[var(--reka-dropdown-menu-content-available-height)] max-w-[calc(100vw-1.5rem)] overflow-y-auto w-64 rounded-xl border border-border bg-popover p-1.5 text-popover-foreground shadow-xl outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
               >
-                <DropdownMenuLabel class="fe-topnav-profile-menu-label px-2.5 py-2">
+                <DropdownMenuLabel class="fe-topnav-profile-menu-label px-3 py-2">
                   <p class="fe-topnav-profile-name truncate text-sm font-medium text-foreground">
                     {{ user?.name || "Signed in" }}
                   </p>
@@ -93,31 +92,30 @@ const showAddDevice = ref(false);
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator class="fe-topnav-profile-separator my-1 h-px bg-border" />
                 <DropdownMenuItem
-                  class="fe-topnav-profile-add-item flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
+                  class="fe-topnav-profile-add-item flex min-h-[40px] cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-foreground outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
                   @select="showAddDevice = true"
                 >
                   <Smartphone class="fe-topnav-profile-add-icon h-4 w-4 text-muted-foreground" aria-hidden="true" />
                   Add Device
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  class="fe-topnav-profile-signout-item flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
+                  class="fe-topnav-profile-signout-item flex min-h-[40px] cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-destructive outline-none transition-colors hover:bg-destructive/10 hover:text-destructive focus:bg-destructive/10 focus:text-destructive"
                   @select="signOut"
                 >
-                  <LogOut class="fe-topnav-profile-signout-icon h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                  <LogOut class="fe-topnav-profile-signout-icon h-4 w-4 text-destructive" aria-hidden="true" />
                   Sign out
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenuPortal>
           </DropdownMenuRoot>
         </template>
-
       </div>
     </div>
 
 
     <p
       v-if="authError && !isLoggedIn"
-      class="fe-topnav-auth-error border-t border-destructive/20 bg-destructive/5 px-4 py-1.5 text-center text-xs text-destructive"
+      class="fe-topnav-auth-error border-t border-destructive/20 bg-destructive/5 px-4 py-1.5 text-center text-xs text-destructive animate-in fade-in-0 duration-150"
       role="alert"
     >
       {{ authError }}

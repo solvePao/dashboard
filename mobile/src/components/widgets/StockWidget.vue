@@ -23,31 +23,17 @@ const props = defineProps<{
   config: StockWidgetConfig;
 }>();
 
-const PERIOD_STORAGE_KEY = "mo_stock_selected_period";
-const savedPeriod = (typeof localStorage !== "undefined" && localStorage.getItem(PERIOD_STORAGE_KEY)) as StockPeriod | null;
+const emit = defineEmits<{
+  (e: "view-mode-change", mode: "grid" | "detail"): void;
+}>();
+
 const validPeriods: StockPeriod[] = ["1D", "5D", "1W", "1M", "3M", "6M", "YTD", "1Y"];
-const selectedPeriod = ref<StockPeriod>(
-  savedPeriod && validPeriods.includes(savedPeriod) ? savedPeriod : "1D"
-);
-
-watch(selectedPeriod, (newPeriod) => {
-  try {
-    localStorage.setItem(PERIOD_STORAGE_KEY, newPeriod);
-  } catch {
-    // Ignore storage issues
+const selectedPeriod = computed<StockPeriod>(() => {
+  if (props.config.period && validPeriods.includes(props.config.period)) {
+    return props.config.period;
   }
+  return "1D";
 });
-
-const periodOptions: { value: StockPeriod; label: string }[] = [
-  { value: "1D", label: "1D Change" },
-  { value: "5D", label: "5D Change" },
-  { value: "1W", label: "1W Change" },
-  { value: "1M", label: "1M Change" },
-  { value: "3M", label: "3M Change" },
-  { value: "6M", label: "6M Change" },
-  { value: "YTD", label: "YTD Change" },
-  { value: "1Y", label: "1Y Change" },
-];
 
 function getQuoteChangePercent(quote: StockQuoteData | null | undefined, period: StockPeriod): number | null {
   if (!quote) return null;
@@ -66,6 +52,14 @@ function getQuoteNetChange(quote: StockQuoteData | null | undefined, period: Sto
 }
 
 const inspectedSymbol = ref<string | null>(null);
+
+watch(
+  inspectedSymbol,
+  (sym) => {
+    emit("view-mode-change", sym !== null ? "detail" : "grid");
+  },
+  { immediate: true }
+);
 const quotes = ref<Record<string, StockQuoteData>>({});
 const previousPrices = ref<Record<string, number>>({});
 const flashStates = ref<Record<string, "up" | "down" | "neutral" | null>>({});
@@ -400,25 +394,18 @@ onBeforeUnmount(() => {
       >
         <!-- 1. Top Terminal Bar -->
         <div class="mo-stock-header flex items-center justify-between gap-2 border-b border-zinc-800/80 pb-2 shrink-0">
-          <!-- Left: Back Button (if multi-symbol) or Bloomberg Tag -->
+          <!-- Left: Back Button (if multi-symbol) -->
           <div class="flex min-w-0 items-center gap-1.5">
             <button
               v-if="symbolsList.length > 1"
               type="button"
-              class="inline-flex items-center gap-1 rounded-xs border border-amber-500/50 bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-400 uppercase tracking-wider hover:bg-amber-500/30 active:scale-95 transition cursor-pointer shrink-0"
+              class="inline-flex items-center justify-center rounded-xs border border-amber-500/50 bg-amber-500/15 p-1 text-amber-400 hover:bg-amber-500/30 active:scale-95 transition cursor-pointer shrink-0"
+              aria-label="Return to Grid"
               title="Return to Grid"
               @click="backToGrid"
             >
               <ArrowLeft class="h-3 w-3" />
-              <span>[GRID]</span>
             </button>
-
-            <span
-              v-else
-              class="inline-flex items-center gap-0.5 bg-amber-500 text-black px-1.5 py-0.5 text-[10px] font-black uppercase tracking-wider rounded-xs leading-none shadow-xs"
-            >
-              BBG
-            </span>
 
             <span class="min-w-0 truncate font-bold text-xs tracking-wider text-amber-400"
               :title="currentSymbol.ticker || currentSymbol.symbol">
@@ -446,44 +433,14 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <!-- Right: Status & Actions -->
-          <div class="mo-stock-actions flex flex-wrap items-center gap-2 text-[10px]">
-            <div class="flex items-center gap-1.5 font-semibold">
+          <!-- Right: Status (Green Live Pulse Dot) -->
+          <div class="mo-stock-actions flex items-center gap-1.5 text-[10px]">
+            <div class="flex items-center" title="Live updates active">
               <span class="relative flex h-2 w-2">
                 <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 duration-1000" />
                 <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
               </span>
-              <span class="text-emerald-400 tracking-wider">LIVE</span>
             </div>
-
-            <!-- Performance Period Dropdown -->
-            <select
-              v-model="selectedPeriod"
-              class="mo-period-select rounded-xs border border-zinc-800 bg-zinc-900/90 px-1.5 py-0.5 text-[9px] font-mono font-bold text-amber-400 uppercase tracking-wider outline-none transition hover:border-amber-500/50 focus:border-amber-500 cursor-pointer"
-              aria-label="Select performance period"
-            >
-              <option
-                v-for="opt in periodOptions"
-                :key="opt.value"
-                :value="opt.value"
-                class="bg-zinc-900 text-zinc-200"
-              >
-                {{ opt.label }}
-              </option>
-            </select>
-
-            <span class="text-zinc-600">|</span>
-            <span class="text-zinc-400 text-[10px]">{{ currentQuote?.lastUpdated || "--:--" }}</span>
-            <button
-              type="button"
-              class="rounded-xs border border-zinc-800 bg-zinc-900/80 p-1 text-zinc-400 transition hover:border-amber-500/40 hover:text-amber-400 cursor-pointer"
-              aria-label="Refresh quote"
-              title="Refresh quote (F9)"
-              :disabled="loading"
-              @click="load(true)"
-            >
-              <RefreshCw class="h-3 w-3" :class="loading && 'animate-spin text-amber-400'" />
-            </button>
           </div>
         </div>
 
@@ -555,6 +512,9 @@ onBeforeUnmount(() => {
                   </template>
                   <template v-else>--</template>
                 </p>
+                <p class="mt-1 text-[10px] font-mono text-zinc-400">
+                  Refreshed {{ currentQuote?.lastUpdated || "--:--" }}
+                </p>
               </div>
             </div>
 
@@ -621,17 +581,6 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </Transition>
-
-        <!-- 5. Terminal Command Strip -->
-        <div class="mo-stock-cmd border-t border-zinc-800/80 pt-1 flex items-center justify-between text-[9px] text-zinc-400 uppercase tracking-widest font-mono shrink-0">
-          <span class="flex items-center gap-1">
-            <span class="text-amber-500 font-bold">&lt;GO&gt;</span>
-            <span>EQ // FEED: TV_SCAN</span>
-          </span>
-          <span class="text-zinc-400">
-            5M SYNC
-          </span>
-        </div>
       </div>
 
       <!-- MODE B: MULTI-SYMBOL GRID (2 to 4 Tickers) -->
@@ -640,56 +589,6 @@ onBeforeUnmount(() => {
         key="grid-view"
         class="mo-stock-view flex min-h-0 min-w-0 h-full w-full flex-col gap-2 overflow-hidden"
       >
-        <!-- Grid Header Strip -->
-        <div class="mo-stock-header flex items-center justify-between border-b border-zinc-800/80 pb-1.5 mb-1.5 shrink-0">
-          <div class="flex items-center gap-1.5">
-            <span class="inline-flex items-center gap-0.5 bg-amber-500 text-black px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider rounded-xs leading-none shadow-xs">
-              BBG
-            </span>
-            <span class="text-amber-400 font-bold text-xs tracking-wider">
-              MATRIX // {{ symbolsList.length }} TICKERS ({{ selectedPeriod }})
-            </span>
-          </div>
-
-          <div class="mo-stock-actions flex flex-wrap items-center gap-2 text-[10px]">
-            <div class="flex items-center gap-1.5 font-semibold">
-              <span class="relative flex h-2 w-2">
-                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 duration-1000" />
-                <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-              </span>
-              <span class="text-emerald-400 tracking-wider">LIVE</span>
-            </div>
-
-            <!-- Performance Period Dropdown -->
-            <select
-              v-model="selectedPeriod"
-              class="mo-period-select rounded-xs border border-zinc-800 bg-zinc-900/90 px-1.5 py-0.5 text-[9px] font-mono font-bold text-amber-400 uppercase tracking-wider outline-none transition hover:border-amber-500/50 focus:border-amber-500 cursor-pointer"
-              aria-label="Select performance period"
-            >
-              <option
-                v-for="opt in periodOptions"
-                :key="opt.value"
-                :value="opt.value"
-                class="bg-zinc-900 text-zinc-200"
-              >
-                {{ opt.label }}
-              </option>
-            </select>
-
-            <span class="text-zinc-600">|</span>
-            <button
-              type="button"
-              class="rounded-xs border border-zinc-800 bg-zinc-900/80 p-1 text-zinc-400 hover:text-amber-400 cursor-pointer"
-              aria-label="Refresh all quotes"
-              title="Refresh all (F9)"
-              :disabled="loading"
-              @click="load(true)"
-            >
-              <RefreshCw class="h-2.5 w-2.5" :class="loading && 'animate-spin text-amber-400'" />
-            </button>
-          </div>
-        </div>
-
         <!-- Dynamic Adaptive Grid Container with TransitionGroup -->
         <TransitionGroup
           name="stock-grid-tile"
@@ -760,17 +659,6 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </TransitionGroup>
-
-        <!-- Bottom Command Strip -->
-        <div class="border-t border-zinc-800/80 pt-1 mt-1 flex items-center justify-between text-[9px] text-zinc-400 uppercase tracking-widest font-mono shrink-0">
-          <span class="flex items-center gap-1">
-            <span class="text-amber-500 font-bold">&lt;GO&gt;</span>
-            <span>TAP TILE FOR FULL VIEW</span>
-          </span>
-          <span class="text-zinc-400">
-            5M SYNC
-          </span>
-        </div>
       </div>
     </Transition>
   </div>

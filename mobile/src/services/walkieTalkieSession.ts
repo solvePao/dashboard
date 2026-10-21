@@ -1,8 +1,8 @@
-import { ApiError } from "../api/client";
 import { WalkieTalkieApi } from "../api/walkieTalkieApi";
 import type { MediaResponse, WalkieSnapshot, WalkieState } from "../types/walkieTalkie";
 
-interface Receiver { pc: RTCPeerConnection; audio: HTMLAudioElement; sessionId: string }
+interface Receiver { pc: RTCPeerConnection; audio: HTMLAudioElement; sessionId: string; disconnectTimer?: ReturnType<typeof setTimeout> }
+interface ReceiverRetry { attempts: number; cleanup: boolean; timer?: ReturnType<typeof setTimeout> }
 
 /** Owns one locally activated session. No media or credentials are persisted. */
 export class WalkieTalkieSession {
@@ -12,6 +12,9 @@ export class WalkieTalkieSession {
   private microphone?: MediaStream;
   private publisher?: RTCPeerConnection;
   private receivers = new Map<string, Receiver>();
+  private receiverRetries = new Map<string, ReceiverRetry>();
+  private publisherDisconnectTimer?: ReturnType<typeof setTimeout>;
+  private stableTimer?: ReturnType<typeof setTimeout>;
   private iceServers: RTCIceServer[] = [];
   private connectionId = "";
   private snapshot?: WalkieSnapshot;
@@ -29,6 +32,7 @@ export class WalkieTalkieSession {
   private leaseId = "";
   private ready = false;
   private enabled = false;
+  private pendingPress = false;
   private state: WalkieState = { status: "activation", message: "Enable audio on this phone to talk and listen.", groupName: "Walkie-talkie", peers: [], members: [], speaker: null, playbackBlocked: false };
 
   private readonly groupId: string;
@@ -43,10 +47,15 @@ export class WalkieTalkieSession {
     this.changed(this.state);
   }
 
-  async enable(): Promise<void> {
+  async enable(autoPress = false): Promise<void> {
     this.pause(false);
     this.enabled = true;
     this.retry = 0;
+    this.pendingPress = autoPress;
+    if (autoPress) {
+      this.held = true;
+      this.requestId = crypto.randomUUID();
+    }
     await this.start(false);
   }
 
@@ -97,6 +106,16 @@ export class WalkieTalkieSession {
       this.iceServers = ice.ice_servers;
       const pc = this.createPeer();
       this.publisher = pc;
+      pc.onconnectionstatechange = () => {
+        if (generation !== this.generation) return;
+        clearTimeout(this.publisherDisconnectTimer);
+        if (pc.connectionState === "failed") this.failed(new Error("Audio network connection interrupted."), true);
+        else if (pc.connectionState === "disconnected") {
+          this.publisherDisconnectTimer = setTimeout(() => {
+            if (generation === this.generation && pc.connectionState === "disconnected") this.failed(new Error("Audio network connection interrupted."), true);
+          }, 8000);
+        }
+      };
       const track = stream.getAudioTracks()[0];
       if (!track) throw new Error("No microphone was found.");
       const transceiver = pc.addTransceiver(track, { direction: "sendonly" });
@@ -110,8 +129,15 @@ export class WalkieTalkieSession {
       await this.api.media(this.connectionId, "ready", {}, signal);
       if (generation !== this.generation) return;
       this.ready = true;
+      this.stableTimer = setTimeout(() => {
+        if (generation === this.generation && this.ready && this.publisher?.connectionState === "connected") this.retry = 0;
+      }, 30_000);
       this.refreshStatus();
       this.scheduleSubscriptions(generation);
+      if (this.pendingPress && this.held) {
+        this.pendingPress = false;
+        this.press();
+      }
     } catch (error) {
       if (generation !== this.generation || signal.aborted) return;
       const denied = error instanceof DOMException && ["NotAllowedError", "NotFoundError", "NotReadableError"].includes(error.name);
@@ -120,11 +146,7 @@ export class WalkieTalkieSession {
   }
 
   private createPeer(): RTCPeerConnection {
-    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "failed" || pc.connectionState === "disconnected") this.failed(new Error("Audio network connection interrupted."), true);
-    };
-    return pc;
+    return new RTCPeerConnection({ iceServers: this.iceServers });
   }
 
   private async gather(pc: RTCPeerConnection, signal: AbortSignal): Promise<void> {
@@ -205,9 +227,17 @@ export class WalkieTalkieSession {
   }
 
   press(): void {
-    if (!this.ready || this.held) return;
+    if (this.held) return;
     this.held = true;
     this.requestId = crypto.randomUUID();
+
+    if (!this.ready) {
+      this.pendingPress = true;
+      if (!this.enabled) {
+        void this.enable(true);
+      }
+      return;
+    }
 
     // Trigger DO wake so all other member devices wake up and connect
     void this.api.wake(this.groupId).catch(() => undefined);
@@ -230,6 +260,7 @@ export class WalkieTalkieSession {
   }
 
   release(): void {
+    this.pendingPress = false;
     this.calling = false;
     clearTimeout(this.callTimer);
     this.microphone?.getAudioTracks().forEach(track => { track.enabled = false; });
@@ -258,6 +289,32 @@ export class WalkieTalkieSession {
     } else this.update({ status: "ready", message: "Channel ready · hold to talk" });
   }
 
+  private hasPublication(target: string): boolean {
+    return Boolean(this.snapshot?.clients.some(peer => peer.connection_id === target && peer.published));
+  }
+
+  private retryReceiver(target: string, generation: number): void {
+    if (generation !== this.generation || !this.ready || !this.hasPublication(target)) return;
+    const receiver = this.receivers.get(target);
+    if (receiver) this.closeReceiver(receiver);
+    this.receivers.delete(target);
+    const retry = this.receiverRetries.get(target) || { attempts: 0, cleanup: true };
+    this.receiverRetries.set(target, retry);
+    retry.cleanup = true;
+    if (retry.timer) return;
+    if (retry.attempts >= 5) {
+      retry.attempts = 6;
+      this.update({ message: "Incoming audio could not reconnect. Pause and enable audio to try again." });
+      return;
+    }
+    retry.attempts++;
+    this.update({ message: "Incoming audio interrupted. Reconnecting your friend…" });
+    retry.timer = setTimeout(() => {
+      retry.timer = undefined;
+      if (generation === this.generation && this.hasPublication(target)) this.scheduleSubscriptions(generation);
+    }, Math.min(1000 * 2 ** (retry.attempts - 1), 15_000));
+  }
+
   private scheduleSubscriptions(generation: number): void {
     if (!this.ready) return;
     this.queue = this.queue.then(async () => {
@@ -266,22 +323,25 @@ export class WalkieTalkieSession {
       for (const [id, receiver] of this.receivers) {
         if (!targets.has(id)) { this.closeReceiver(receiver); this.receivers.delete(id); }
       }
+      for (const [id, retry] of this.receiverRetries) {
+        if (!targets.has(id)) { clearTimeout(retry.timer); this.receiverRetries.delete(id); }
+      }
       for (const target of targets) {
         if (generation !== this.generation) return;
-        if (this.receivers.has(target)) continue;
-        try { await this.subscribe(target, generation); }
-        catch (error) {
-          if (error instanceof ApiError && error.status === 404) {
-            const stale = this.receivers.get(target);
-            if (stale) this.closeReceiver(stale);
-            this.receivers.delete(target);
-            continue;
+        const retry = this.receiverRetries.get(target);
+        if (this.receivers.has(target) || retry?.timer || (retry && retry.attempts > 5)) continue;
+        try {
+          if (retry?.cleanup) {
+            await this.api.media(this.connectionId, "close", { target }, this.controller.signal);
+            if (generation !== this.generation || !this.hasPublication(target)) return;
+            retry.cleanup = false;
           }
-          throw error;
+          await this.subscribe(target, generation);
+        } catch {
+          if (generation === this.generation && !this.controller.signal.aborted) this.retryReceiver(target, generation);
         }
       }
-      if (generation === this.generation) this.retry = 0;
-    }).catch(error => { if (generation === this.generation && !this.controller.signal.aborted) this.failed(error, true); });
+    }).catch(() => undefined);
   }
 
   private async subscribe(target: string, generation: number): Promise<void> {
@@ -289,8 +349,18 @@ export class WalkieTalkieSession {
     const audio = new Audio(); audio.autoplay = true; audio.muted = true;
     const receiver: Receiver = { pc, audio, sessionId: "" };
     this.receivers.set(target, receiver);
+    pc.onconnectionstatechange = () => {
+      if (generation !== this.generation || this.receivers.get(target) !== receiver) return;
+      clearTimeout(receiver.disconnectTimer);
+      if (pc.connectionState === "failed") this.retryReceiver(target, generation);
+      else if (pc.connectionState === "disconnected") {
+        receiver.disconnectTimer = setTimeout(() => {
+          if (generation === this.generation && this.receivers.get(target) === receiver && pc.connectionState === "disconnected") this.retryReceiver(target, generation);
+        }, 8000);
+      }
+    };
     pc.ontrack = event => {
-      if (generation !== this.generation) return;
+      if (generation !== this.generation || this.receivers.get(target) !== receiver) return;
       audio.srcObject = new MediaStream([event.track]);
       this.applyPlaybackGate();
       void audio.play().catch(() => this.update({ playbackBlocked: true }));
@@ -300,10 +370,15 @@ export class WalkieTalkieSession {
     receiver.sessionId = result.session_id;
     if (!result.sessionDescription) throw new Error("No incoming audio offer was returned.");
     await pc.setRemoteDescription(result.sessionDescription);
+    if (generation !== this.generation) return;
     await pc.setLocalDescription(await pc.createAnswer());
+    if (generation !== this.generation) return;
     await this.gather(pc, this.controller.signal);
+    if (generation !== this.generation) return;
     await this.api.media(this.connectionId, "answer", { session_id: receiver.sessionId, sdp: pc.localDescription?.sdp }, this.controller.signal);
+    if (generation !== this.generation) return;
     await this.connected(pc, this.controller.signal);
+    if (generation === this.generation) this.refreshStatus();
   }
 
   private applyPlaybackGate(): void {
@@ -334,16 +409,21 @@ export class WalkieTalkieSession {
   }
 
   private closeReceiver(receiver: Receiver): void {
+    clearTimeout(receiver.disconnectTimer);
+    receiver.pc.ontrack = null;
     receiver.pc.onconnectionstatechange = null;
     receiver.pc.close(); receiver.audio.pause(); receiver.audio.srcObject = null;
   }
 
   pause(showMessage = true): void {
+    this.pendingPress = false;
     this.calling = false;
     clearTimeout(this.callTimer);
     this.release();
     this.enabled = false; this.ready = false; this.generation++;
     clearInterval(this.heartbeat); clearTimeout(this.reconnectTimer);
+    clearTimeout(this.publisherDisconnectTimer); clearTimeout(this.stableTimer);
+    this.receiverRetries.forEach(retry => clearTimeout(retry.timer)); this.receiverRetries.clear();
     this.controller.abort();
     if (this.socket) { this.socket.onclose = null; this.socket.onerror = null; this.socket.onmessage = null; this.socket.close(); this.socket = undefined; }
     if (this.publisher) { this.publisher.onconnectionstatechange = null; this.publisher.close(); this.publisher = undefined; }
