@@ -96,6 +96,61 @@ fn user_id_param_binds_and_rejects_overflow() {
 }
 
 #[test]
+fn sqlite_bool_reads_json_bools_and_c_integers() {
+    // One controllable deserializer drives every shape through a single
+    // instantiation: serde_json itself cannot fail `Value::deserialize`,
+    // which would leave a dead error region in its instantiation.
+    enum Shape {
+        Bool(bool),
+        Int(i64),
+        Text(&'static str),
+        Null,
+        Float(f64),
+        Fail,
+    }
+    struct Flexible(Shape);
+    impl<'de> serde::de::Deserializer<'de> for Flexible {
+        type Error = serde::de::value::Error;
+        fn deserialize_any<V: serde::de::Visitor<'de>>(
+            self,
+            visitor: V,
+        ) -> Result<V::Value, Self::Error> {
+            match self.0 {
+                Shape::Bool(b) => visitor.visit_bool(b),
+                Shape::Int(n) => visitor.visit_i64(n),
+                Shape::Text(s) => visitor.visit_borrowed_str(s),
+                Shape::Null => visitor.visit_none(),
+                Shape::Float(f) => visitor.visit_f64(f),
+                Shape::Fail => Err(serde::de::Error::custom("boom")),
+            }
+        }
+        serde::forward_to_deserialize_any! {
+            bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 char str string
+            bytes byte_buf option unit unit_struct newtype_struct seq tuple
+            tuple_struct map struct enum identifier ignored_any
+        }
+    }
+    fn read(shape: Shape) -> bool {
+        backend::db::helper::sqlite_bool(Flexible(shape)).unwrap()
+    }
+
+    // Native bools pass through.
+    assert!(read(Shape::Bool(true)));
+    assert!(!read(Shape::Bool(false)));
+    // Integers follow C truthiness.
+    assert!(read(Shape::Int(1)));
+    assert!(!read(Shape::Int(0)));
+    assert!(read(Shape::Int(2)));
+    assert!(read(Shape::Int(-3)));
+    // Anything else is false.
+    assert!(!read(Shape::Text("yes")));
+    assert!(!read(Shape::Null));
+    assert!(!read(Shape::Float(1.5)));
+    // Deserializer failure propagates instead of defaulting.
+    assert!(backend::db::helper::sqlite_bool(Flexible(Shape::Fail)).is_err());
+}
+
+#[test]
 fn text_or_null_maps() {
     match text_or_null(Some("x")) {
         D1Type::Text(s) => assert_eq!(s, "x"),

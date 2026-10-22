@@ -47,10 +47,10 @@ pub struct Group {
     #[serde(default)]
     pub members: Vec<Member>,
     #[serde(default)]
-    #[serde(deserialize_with = "sqlite_bool")]
+    #[serde(deserialize_with = "crate::db::helper::sqlite_bool")]
     pub joined: bool,
     #[serde(default)]
-    #[serde(deserialize_with = "sqlite_bool")]
+    #[serde(deserialize_with = "crate::db::helper::sqlite_bool")]
     pub active: bool,
 }
 
@@ -71,10 +71,4 @@ pub async fn room_call(
     stub.fetch_with_request(req)
         .await
         .map_err(|_| AppError::service_unavailable("Walkie-talkie coordinator unavailable."))
-}
-
-fn sqlite_bool<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
-    let v = serde_json::Value::deserialize(d)?;
-    Ok(v.as_bool()
-        .unwrap_or_else(|| v.as_i64().is_some_and(|n| n != 0)))
 }

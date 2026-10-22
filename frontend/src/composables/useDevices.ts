@@ -9,6 +9,7 @@ import {
   devicesHubUrl,
 } from "../api/deviceApi";
 import { isStoredSessionExpired } from "../services/sessionStorage";
+import { liveSocket } from "../services/liveSocket";
 import type { DeviceItem, AuthorizeDeviceResult } from "../types/device";
 
 const devices = ref<DeviceItem[]>([]);
@@ -50,10 +51,7 @@ interface HubSnapshot {
   last_event?: HubEvent | null;
 }
 
-let hubSocket: WebSocket | null = null;
-let hubReconnectTimer: ReturnType<typeof setTimeout> | undefined;
-let hubReconnectAttempts = 0;
-let hubWanted = false;
+let hubUnsubscribe: (() => void) | undefined;
 let lastHubRevision = 0;
 let lastFetchToken: string | null = null;
 
@@ -96,56 +94,25 @@ export function useDevices() {
   }
 
   function connectHub(): void {
-    hubWanted = true;
-    if (hubSocket && hubSocket.readyState <= WebSocket.OPEN) return;
-    if (isStoredSessionExpired()) {
-      hubWanted = false;
-      return;
-    }
-
-    const ws = new WebSocket(devicesHubUrl());
-    hubSocket = ws;
-
-    ws.onopen = () => {
-      hubReconnectAttempts = 0;
-    };
-    ws.onmessage = (message) => {
-      try {
-        const body = JSON.parse(String(message.data)) as HubEvent | HubSnapshot;
-        if (body.kind === "snapshot") {
-          handleHubSnapshot(body as HubSnapshot);
-        } else {
-          applyHubEvent(body as HubEvent);
-        }
-      } catch {
-        logger.warn("devices", "Ignored malformed hub message");
+    if (isStoredSessionExpired()) return;
+    liveSocket.connect(devicesHubUrl());
+    if (hubUnsubscribe) return;
+    hubUnsubscribe = liveSocket.subscribe("hub", (envelope) => {
+      const body = envelope as unknown as HubEvent | HubSnapshot;
+      if (body.kind === "snapshot") {
+        handleHubSnapshot(body as HubSnapshot);
+      } else if (typeof body.kind === "string") {
+        applyHubEvent(body as HubEvent);
       }
-    };
-    ws.onclose = () => {
-      if (hubSocket === ws) hubSocket = null;
-      if (hubWanted && !isStoredSessionExpired()) {
-        const delay = Math.min(1000 * 2 ** hubReconnectAttempts, 5000);
-        hubReconnectAttempts += 1;
-        hubReconnectTimer = setTimeout(connectHub, delay);
-      }
-    };
-    ws.onerror = () => ws.close();
+    });
   }
 
   function closeHub(): void {
-    hubWanted = false;
-    if (hubReconnectTimer) {
-      clearTimeout(hubReconnectTimer);
-      hubReconnectTimer = undefined;
-    }
-    hubReconnectAttempts = 0;
+    hubUnsubscribe?.();
+    hubUnsubscribe = undefined;
+    liveSocket.disconnect();
     lastHubRevision = 0;
     lastFetchToken = null;
-    if (hubSocket) {
-      hubSocket.onclose = null;
-      hubSocket.close();
-      hubSocket = null;
-    }
   }
 
   async function fetchDevices(token: string | null): Promise<void> {

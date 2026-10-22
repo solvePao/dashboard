@@ -13,6 +13,11 @@ pub const DB_BINDING_NAME: &str = "dashboard";
 pub const PAIRING_BINDING_NAME: &str = "PAIRING_OBJECT";
 pub const DEVICE_BINDING_NAME: &str = "DEVICE_OBJECT";
 pub const HUB_BINDING_NAME: &str = "DEVICES_HUB";
+pub const GATEWAY_BINDING_NAME: &str = "CLIENT_GATEWAY";
+/// Single mux socket identity prefixes: one gateway instance per client.
+pub fn gateway_device_name(token: &str) -> String { format!("device:{token}") }
+pub fn gateway_user_name(user_id: i64) -> String { format!("user:{user_id}") }
+pub fn gateway_pairing_name(session_id: &str) -> String { format!("pairing:{session_id}") }
 
 /// Cookie carrying the web session JWT for the hub WebSocket only.
 /// REST routes keep using the `Authorization: Bearer` header.

@@ -72,7 +72,6 @@ let refreshing = false;
 
 const selected = computed(() => groups.value.find(group => group.id === selectedId.value));
 const owner = computed(() => selected.value?.owner_id === userId.value);
-const activeGroup = computed(() => groups.value.find(group => group.active));
 const title = computed(() => {
   switch (panel.value) {
     case "create":
@@ -175,13 +174,11 @@ function createGroup(): void {
   });
 }
 
-function activate(groupId: string | null): void {
+function activate(groupId: string): void {
   void run(() =>
     mutate(
       () => walkieTalkieApi.activate(groupId, props.deviceToken),
-      groupId
-        ? "Active group updated for this device."
-        : "Active group cleared. Device memberships are saved."
+      "Active group updated for this device."
     )
   );
 }
@@ -616,16 +613,6 @@ onUnmounted(() => {
               </div>
             </li>
           </ul>
-        </div>
-
-        <div v-if="activeGroup" class="pt-2">
-          <button
-            type="button"
-            class="min-h-[44px] sm:min-h-0 inline-flex items-center text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground active:opacity-70 transition"
-            @click="activate(null)"
-          >
-            Clear active group for this device
-          </button>
         </div>
       </div>
     </fieldset>

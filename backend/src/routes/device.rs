@@ -173,11 +173,13 @@ pub async fn check_session(mut req: Request, ctx: RouteContext<()>) -> Result<Re
 /// subrequest targeting the specified internal Durable Object route, and dispatches it.
 /// Rebuilding the request is necessary because the incoming request carries immutable
 /// headers which Cloudflare Workers refuses to forward directly into a subrequest.
-async fn forward_websocket_to_stub(
+async fn forward_gateway_socket(
     req: &Request,
     stub: &Stub,
     target_url: &str,
     error_msg: &'static str,
+    gateway_kind: &str,
+    gateway_id: &str,
 ) -> Result<Response> {
     let headers = Headers::new();
     for name in [
@@ -192,6 +194,10 @@ async fn forward_websocket_to_stub(
             let _ = headers.set(name, &value);
         }
     }
+    if !gateway_kind.is_empty() {
+        let _ = headers.set("x-gateway-kind", gateway_kind);
+        let _ = headers.set("x-gateway-id", gateway_id);
+    }
     let mut init = RequestInit::new();
     init.method = Method::Get;
     init.headers = headers;
@@ -203,72 +209,49 @@ async fn forward_websocket_to_stub(
     stub.fetch_with_request(do_req).await
 }
 
-/// Proxies the mobile WebSocket upgrade to the session's PairingObject.
-///
-/// No auth token is required: the `session_id` is a 32-char random hex string,
-/// making it computationally unguessable. Accepted trade-off: anyone who can observe
-/// the session_id (e.g. via QR interception) can connect and receive the push.
-/// The PairingObject's Wipe alarm (2 min) closes the replay window once the result
-/// is delivered or the session expires.
-pub async fn pairing_socket(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+fn gateway_stub(ctx: &RouteContext<()>, name: &str) -> std::result::Result<Stub, Response> {
+    let namespace = ctx.env.durable_object(crate::common::GATEWAY_BINDING_NAME)
+        .map_err(|_| Response::from_json(&serde_json::json!({"error": "Failed to reach live gateway."})).unwrap().with_status(502))?;
+    namespace.get_by_name(name)
+        .map_err(|_| Response::from_json(&serde_json::json!({"error": "Failed to reach live gateway."})).unwrap().with_status(502))
+}
+
+/// Single mux socket for a pairing session (channel `pairing`).
+/// No auth token is required: the `session_id` is a 32-char random hex string.
+pub async fn live_pairing(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let raw = ctx.param("session_id").map(String::as_str).unwrap_or("");
     let session_id = match crate::services::validation::validate_session_id(raw) {
         Ok(id) => id,
         Err(err) => return err.to_response(),
     };
-
-    let client = match crate::services::DoPairingClient::from_env(&ctx.env) {
-        Ok(c) => c,
-        Err(err) => return err.to_response(),
-    };
-
-    let stub = match client.namespace().get_by_name(&session_id) {
-        Ok(s) => s,
-        Err(_) => return json_error("Failed to reach pairing session.", 502),
-    };
-
-    forward_websocket_to_stub(&req, &stub, "https://pairing/ws", "Failed to reach pairing session.").await
+    let stub = match gateway_stub(&ctx, &crate::common::gateway_pairing_name(&session_id)) { Ok(s) => s, Err(r) => return Ok(r) };
+    forward_gateway_socket(&req, &stub, "https://gateway/ws", "Failed to reach live gateway.", "pairing", &session_id).await
 }
 
-/// Proxies the mobile device WebSocket upgrade to the device's DeviceObject.
-pub async fn device_socket(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+/// Single mux socket for an authorized device (channels `device` + `walkie`).
+pub async fn live_device(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let token = match validation::require_route_token(ctx.param("token").map(String::as_str)) {
         Ok(t) => t,
         Err(err) => return err.to_response(),
     };
-
     let db = match get_db(&ctx) {
         Ok(db) => db,
         Err(err) => return err.to_response(),
     };
-
     match crate::db::users::get_user_by_device_token(&db, &token).await {
         Ok(Some(_)) => {}
         Ok(None) => return json_error("Device token not found or expired.", 401),
         Err(_) => return json_error("Database error.", 500),
     }
-
-    let namespace = match ctx.env.durable_object(crate::common::DEVICE_BINDING_NAME) {
-        Ok(ns) => ns,
-        Err(_) => return json_error("Failed to reach device session.", 502),
-    };
-
-    let stub = match namespace.get_by_name(&token) {
-        Ok(s) => s,
-        Err(_) => return json_error("Failed to reach device session.", 502),
-    };
-
-    forward_websocket_to_stub(&req, &stub, "https://device/ws", "Failed to reach device session.").await
+    let stub = match gateway_stub(&ctx, &crate::common::gateway_device_name(&token)) { Ok(s) => s, Err(r) => return Ok(r) };
+    forward_gateway_socket(&req, &stub, "https://gateway/ws", "Failed to reach live gateway.", "device", &token).await
 }
 
-/// Proxies the web dashboard WebSocket upgrade to the user's
-/// `DevicesHubObject`. Browsers cannot send `Authorization` on a
-/// WebSocket handshake, so the hub authenticates from the HttpOnly
-/// session cookie planted at login. Because cookies are ambient, the
-/// `Origin` must match a configured frontend origin (CSWSH guard).
-/// The hub is addressed by the server-derived user id, never by any
-/// client-supplied identifier.
-pub async fn devices_live(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+/// Single mux socket for the web dashboard (channel `hub`).
+/// Browsers cannot send `Authorization` on a WebSocket handshake, so the
+/// gateway authenticates from the HttpOnly session cookie planted at login.
+/// Because cookies are ambient, the `Origin` must match (CSWSH guard).
+pub async fn live_hub(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let allowed = allowed_origins(&ctx.env);
     let origin = request_origin(&req);
     if !is_origin_allowed(origin.as_deref(), &allowed) {
@@ -291,17 +274,8 @@ pub async fn devices_live(req: Request, ctx: RouteContext<()>) -> Result<Respons
         Err(err) => return err.to_response(),
     };
 
-    let namespace = match ctx.env.durable_object(crate::common::HUB_BINDING_NAME) {
-        Ok(ns) => ns,
-        Err(_) => return json_error("Failed to reach devices hub.", 502),
-    };
-
-    let stub = match namespace.get_by_name(&user.id.to_string()) {
-        Ok(s) => s,
-        Err(_) => return json_error("Failed to reach devices hub.", 502),
-    };
-
-    forward_websocket_to_stub(&req, &stub, "https://hub/ws", "Failed to reach devices hub.").await
+    let stub = match gateway_stub(&ctx, &crate::common::gateway_user_name(user.id)) { Ok(s) => s, Err(r) => return Ok(r) };
+    forward_gateway_socket(&req, &stub, "https://gateway/ws", "Failed to reach live gateway.", "user", &user.id.to_string()).await
 }
 
 pub async fn get_devices(req: Request, ctx: RouteContext<()>) -> Result<Response> {

@@ -1,5 +1,8 @@
 import { WalkieTalkieApi } from "../api/walkieTalkieApi";
+import { liveSocket } from "./liveSocket";
 import type { MediaResponse, WalkieSnapshot, WalkieState } from "../types/walkieTalkie";
+
+const armedKey = (groupId: string) => `walkie-armed:${groupId}`;
 
 interface Receiver { pc: RTCPeerConnection; audio: HTMLAudioElement; sessionId: string; disconnectTimer?: ReturnType<typeof setTimeout> }
 interface ReceiverRetry { attempts: number; cleanup: boolean; timer?: ReturnType<typeof setTimeout> }
@@ -8,7 +11,7 @@ interface ReceiverRetry { attempts: number; cleanup: boolean; timer?: ReturnType
 export class WalkieTalkieSession {
   private readonly api = new WalkieTalkieApi();
   private controller = new AbortController();
-  private socket?: WebSocket;
+  private unsubscribeWalkie?: () => void;
   private microphone?: MediaStream;
   private publisher?: RTCPeerConnection;
   private receivers = new Map<string, Receiver>();
@@ -19,7 +22,6 @@ export class WalkieTalkieSession {
   private connectionId = "";
   private snapshot?: WalkieSnapshot;
   private queue: Promise<void> = Promise.resolve();
-  private heartbeat?: ReturnType<typeof setInterval>;
   private renew?: ReturnType<typeof setInterval>;
   private leaseTimer?: ReturnType<typeof setTimeout>;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
@@ -33,7 +35,11 @@ export class WalkieTalkieSession {
   private ready = false;
   private enabled = false;
   private pendingPress = false;
-  private state: WalkieState = { status: "activation", message: "Enable audio on this phone to talk and listen.", groupName: "Walkie-talkie", peers: [], members: [], speaker: null, playbackBlocked: false };
+  private liveCall = false;
+  private pendingLiveCall = false;
+  private pendingCallJoin = false;
+  private inCall = false;
+  private state: WalkieState = { status: "activation", message: "Enable audio on this phone to talk and listen.", groupName: "Walkie-talkie", peers: [], members: [], speaker: null, playbackBlocked: false, inLiveCall: false };
 
   private readonly groupId: string;
   private readonly changed: (state: WalkieState) => void;
@@ -48,7 +54,14 @@ export class WalkieTalkieSession {
   }
 
   async enable(autoPress = false): Promise<void> {
+    // pause() clears pending intents; a live-call start/join queued for this
+    // fresh start must survive it, or Live pressed from idle does nothing.
+    const keepLiveCall = this.pendingLiveCall;
+    const keepCallJoin = this.pendingCallJoin;
     this.pause(false);
+    this.pendingLiveCall = keepLiveCall;
+    this.pendingCallJoin = keepCallJoin;
+    this.liveCall = keepLiveCall || this.liveCall;
     this.enabled = true;
     this.retry = 0;
     this.pendingPress = autoPress;
@@ -65,42 +78,41 @@ export class WalkieTalkieSession {
     const signal = this.controller.signal;
     this.update({ status: reconnecting ? "reconnecting" : "connecting", message: "Connecting audio…", playbackBlocked: false });
     try {
-      const availability = await this.api.availability(signal);
-      if (generation !== this.generation || signal.aborted) return;
-      this.update({ groupName: availability.group_name, message: "Allow microphone access in your browser to connect…" });
+      this.update({ message: "Allow microphone access in your browser to connect…" });
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("Microphone access requires HTTPS and a supported browser.");
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
       stream.getAudioTracks().forEach(track => { track.enabled = false; });
       if (generation !== this.generation) { stream.getTracks().forEach(track => track.stop()); return; }
       this.microphone = stream;
       stream.getAudioTracks().forEach(track => { track.onended = () => this.failed(new Error("Microphone was disconnected. Enable audio again."), false); });
-      const ticket = await this.api.connect(signal);
+      // Join this group on the phone's single mux socket (channel `walkie`).
+      await liveSocket.whenOpen();
       if (generation !== this.generation || signal.aborted) return;
-      if (ticket.group_id !== this.groupId) throw new Error("The assigned group changed. Wait for the dashboard update.");
-      this.update({ groupName: ticket.group_name });
-      const ws = this.api.socket(ticket.group_id, ticket.ticket);
-      this.socket = ws;
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error("Audio connection timed out.")), 15_000);
         const abort = () => { clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); };
         signal.addEventListener("abort", abort, { once: true });
-        ws.onmessage = event => {
+        this.unsubscribeWalkie = liveSocket.subscribeWalkie(this.groupId, false, (envelope) => {
           if (generation !== this.generation) return;
-          let data: Record<string, unknown>;
-          try { data = JSON.parse(String(event.data)) as Record<string, unknown>; } catch { return; }
-          if (data.type === "connected" && typeof data.connection_id === "string") {
+          const data = envelope as unknown as Record<string, unknown>;
+          if (data.type === "socket_closed") {
+            if (this.enabled) this.failed(new Error("Connection lost."), true);
+            return;
+          }
+          // Only the media subscription may claim connection_id. The observe
+          // subscription for this same group shares the socket and its
+          // `connected` reply carries a different, media-less connection.
+          if (data.type === "connected" && data.observe === false && typeof data.connection_id === "string") {
             this.connectionId = data.connection_id;
+            if (typeof data.group_name === "string") this.update({ groupName: data.group_name });
             clearTimeout(timer); signal.removeEventListener("abort", abort); resolve();
+          } else if (data.type === "error") {
+            clearTimeout(timer); signal.removeEventListener("abort", abort);
+            reject(new Error(typeof data.message === "string" ? data.message : "Audio connection failed."));
           } else { this.message(data); }
-        };
-        ws.onerror = () => { clearTimeout(timer); reject(new Error("Audio connection failed.")); };
-        ws.onclose = () => {
-          clearTimeout(timer);
-          reject(new Error("Audio connection closed."));
-          if (generation === this.generation && this.enabled) this.failed(new Error("Connection lost."), true);
-        };
+        });
       });
-      this.heartbeat = setInterval(() => this.send({ type: "heartbeat" }), 10_000);
+      try { localStorage.setItem(armedKey(this.groupId), "1"); } catch { /* private mode */ }
       const ice = await this.api.media<{ ice_servers: RTCIceServer[] }>(this.connectionId, "ice", {}, signal);
       if (generation !== this.generation || signal.aborted) return;
       this.iceServers = ice.ice_servers;
@@ -134,7 +146,16 @@ export class WalkieTalkieSession {
       }, 30_000);
       this.refreshStatus();
       this.scheduleSubscriptions(generation);
-      if (this.pendingPress && this.held) {
+      // A snapshot may have arrived before `connected` (empty connectionId);
+      // re-evaluate any ringing call now that this session can act on it.
+      if (this.snapshot?.call) this.handleCallSnapshot();
+      if (this.pendingLiveCall) {
+        this.pendingLiveCall = false;
+        this.send({ type: "call_start", request_id: this.requestId });
+      } else if (this.pendingCallJoin) {
+        this.pendingCallJoin = false;
+        this.send({ type: "call_join" });
+      } else if (this.pendingPress && this.held) {
         this.pendingPress = false;
         this.press();
       }
@@ -152,14 +173,29 @@ export class WalkieTalkieSession {
   private async gather(pc: RTCPeerConnection, signal: AbortSignal): Promise<void> {
     if (pc.iceGatheringState === "complete") return;
     await new Promise<void>((resolve, reject) => {
+      let debounceTimer: ReturnType<typeof setTimeout> | undefined;
       const finish = (error?: Error) => {
-        clearTimeout(timer); pc.removeEventListener("icegatheringstatechange", check); signal.removeEventListener("abort", abort);
+        clearTimeout(timer);
+        clearTimeout(debounceTimer);
+        pc.removeEventListener("icegatheringstatechange", check);
+        pc.removeEventListener("icecandidate", onCandidate);
+        signal.removeEventListener("abort", abort);
         if (error) reject(error); else resolve();
       };
       const check = () => { if (pc.iceGatheringState === "complete") finish(); };
+      const onCandidate = (event: RTCPeerConnectionIceEvent) => {
+        if (event.candidate) {
+          clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => finish(), 400);
+        } else {
+          finish();
+        }
+      };
       const abort = () => finish(new DOMException("Aborted", "AbortError"));
-      const timer = setTimeout(() => finish(new Error("Could not establish audio network candidates.")), 12_000);
-      pc.addEventListener("icegatheringstatechange", check); signal.addEventListener("abort", abort, { once: true });
+      const timer = setTimeout(() => finish(), 1500);
+      pc.addEventListener("icegatheringstatechange", check);
+      pc.addEventListener("icecandidate", onCandidate);
+      signal.addEventListener("abort", abort, { once: true });
       if (signal.aborted) abort();
     });
   }
@@ -186,16 +222,11 @@ export class WalkieTalkieSession {
     if (data.type === "snapshot") {
       this.snapshot = data as unknown as WalkieSnapshot;
       this.update({ groupName: this.snapshot.group_name || this.state.groupName, peers: this.snapshot.clients, members: this.snapshot.members, speaker: this.snapshot.speaker });
-      if (this.leaseId && this.snapshot.speaker?.connection_id !== this.connectionId) this.release();
+      if (this.leaseId && this.snapshot.speaker?.connection_id !== this.connectionId) this.release(true);
 
-      if (this.calling && this.held) {
-        const peers = (this.snapshot.clients || []).filter(c => c.connection_id !== this.connectionId);
-        if (peers.length > 0) {
-          this.calling = false;
-          clearTimeout(this.callTimer);
-          this.send({ type: "press", request_id: this.requestId });
-        }
-      }
+      // Server holds a ring window for solo PTT and grants on peer join;
+      // no client re-press is needed (it would read as busy against itself).
+      this.handleCallSnapshot();
 
       this.applyPlaybackGate();
       this.refreshStatus();
@@ -212,18 +243,89 @@ export class WalkieTalkieSession {
       this.refreshStatus();
     } else if (data.type === "renewed" && data.lease_id === this.leaseId) {
       this.armLease();
+    } else if (data.type === "calling") {
+      this.calling = true;
+      clearTimeout(this.callTimer);
+      this.callTimer = setTimeout(() => {
+        if (this.calling) {
+          this.calling = false;
+          this.release(true);
+          this.update({ status: "ready", message: "No one is available right now." });
+        }
+      }, 30_000);
+      this.refreshStatus();
+    } else if (data.type === "call_busy") {
+      this.liveCall = false;
+      this.pendingLiveCall = false;
+      this.update({ status: "busy", message: "There is already a live call in this group.", inLiveCall: false, callState: null });
+    } else if (data.type === "call_ended") {
+      this.inCall = false;
+      this.liveCall = false;
+      this.microphone?.getAudioTracks().forEach(track => { track.enabled = false; });
+      this.update({ status: "ready", message: "Live call ended.", inLiveCall: false, callState: null });
+      this.refreshStatus();
     } else if (data.type === "busy") {
-      this.release(); this.update({ status: "busy", message: "Channel busy. Release and press again when your friend finishes." });
+      this.liveCall = false;
+      this.release(true);
+      this.update({ status: "busy", message: "Channel busy. Release and press again when your friend finishes.", inLiveCall: false, callState: null });
     } else if (data.type === "ended") {
+      this.liveCall = false;
       this.pause(false);
-      this.update({ status: "activation", message: typeof data.reason === "string" ? data.reason : "Session ended. Enable audio again." });
+      this.update({ status: "activation", message: typeof data.reason === "string" ? data.reason : "Session ended. Enable audio again.", inLiveCall: false });
     }
+  }
+
+  private get armed(): boolean {
+    try { return localStorage.getItem(armedKey(this.groupId)) === "1"; } catch { return false; }
+  }
+
+  /** React to the room's live-call state carried on every snapshot. */
+  private handleCallSnapshot(): void {
+    const call = this.snapshot?.call ?? null;
+    if (!call) {
+      if (this.inCall) {
+        this.inCall = false;
+        this.liveCall = false;
+        this.microphone?.getAudioTracks().forEach(track => { track.enabled = false; });
+        this.update({ inLiveCall: false, callState: null, message: "Live call ended." });
+      }
+      return;
+    }
+    const participant = call.participants.includes(this.connectionId);
+    if (participant) {
+      this.liveCall = true;
+      if (call.participants.length >= 2) {
+        this.inCall = true;
+        // Open mic for the duration of the call; no hold, no lease.
+        this.microphone?.getAudioTracks().forEach(track => { track.enabled = true; });
+        this.update({ inLiveCall: true, callState: "in-call" });
+      } else {
+        this.update({ inLiveCall: true, callState: "ringing", status: "ringing", message: "Calling group… waiting for someone to join" });
+      }
+      return;
+    }
+    // Incoming call while connected but not yet a participant.
+    if (this.inCall) return;
+    this.update({ callState: "ringing", status: "ringing", message: "Incoming live call…", inLiveCall: false });
+    if (this.armed) {
+      // Armed devices enable audio automatically when a call starts.
+      // Never re-enter enable() while a start is already in flight: it
+      // pauses first and would wipe the pending join.
+      if (this.ready) this.send({ type: "call_join" });
+      else { this.pendingCallJoin = true; if (!this.enabled) void this.enable(); }
+    }
+  }
+
+  /** Join a ringing live call (used by the widget's Join tap when unarmed). */
+  joinLiveCall(): void {
+    if (this.ready) this.send({ type: "call_join" });
+    else { this.pendingCallJoin = true; if (!this.enabled) void this.enable(); }
   }
 
   private armLease(): void {
     clearTimeout(this.leaseTimer);
     // Fail muted before the server's six-second lease expires if acknowledgements stop.
-    this.leaseTimer = setTimeout(() => { this.release(); this.update({ message: "Talk connection interrupted. Press again." }); }, 5000);
+    this.leaseTimer = setTimeout(() => { this.release(true); this.update({ message: "Talk connection interrupted. Press again." }); }, 5000);
   }
 
   press(): void {
@@ -239,27 +341,16 @@ export class WalkieTalkieSession {
       return;
     }
 
-    // Trigger DO wake so all other member devices wake up and connect
-    void this.api.wake(this.groupId).catch(() => undefined);
-
-    const peers = (this.snapshot?.clients || []).filter(c => c.connection_id !== this.connectionId);
-    if (peers.length === 0) {
-      this.calling = true;
-      this.update({ status: "calling", message: "Calling group… waiting for peers to join" });
-      clearTimeout(this.callTimer);
-      this.callTimer = setTimeout(() => {
-        if (this.calling) {
-          this.calling = false;
-          this.release();
-          this.update({ status: "ready", message: "No one is available right now." });
-        }
-      }, 8000);
-    } else {
-      this.send({ type: "press", request_id: this.requestId });
-    }
+    // The room wakes the group and holds a 30s ring window server-side;
+    // it replies `calling` (no peers yet) or `granted` (floor is yours).
+    this.send({ type: "press", request_id: this.requestId });
   }
 
-  release(): void {
+  release(_force = false): void {
+    // A live call is ended only via endLiveCall; PTT release must not drop it.
+    void _force;
+    if (this.inCall) return;
+    this.liveCall = false;
     this.pendingPress = false;
     this.calling = false;
     clearTimeout(this.callTimer);
@@ -271,22 +362,77 @@ export class WalkieTalkieSession {
     this.refreshStatus();
   }
 
+  startLiveCall(): void {
+    if (this.liveCall) return;
+    this.liveCall = true;
+    this.requestId = crypto.randomUUID();
+    this.update({ callState: "ringing", status: "ringing", message: "Calling group…", inLiveCall: true });
+    if (!this.ready) {
+      this.pendingLiveCall = true;
+      if (!this.enabled) void this.enable();
+      return;
+    }
+    this.send({ type: "call_start", request_id: this.requestId });
+  }
+
+  endLiveCall(): void {
+    this.send({ type: "call_end" });
+    this.inCall = false;
+    this.liveCall = false;
+    this.pendingLiveCall = false;
+    this.pendingCallJoin = false;
+    this.microphone?.getAudioTracks().forEach(track => { track.enabled = false; });
+    this.update({ inLiveCall: false, callState: null, status: "ready", message: "Live call ended." });
+    this.refreshStatus();
+  }
+
+  toggleLiveCall(): void {
+    // Ringing incoming call from someone else: tap means Join, not End.
+    if (this.state.callState === "ringing" && !this.liveCall) {
+      this.joinLiveCall();
+    } else if (this.liveCall) {
+      this.endLiveCall();
+    } else {
+      this.startLiveCall();
+    }
+  }
+
   private send(value: Record<string, unknown>): void {
-    if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(value));
+    liveSocket.sendWalkie(this.groupId, value);
   }
 
   private refreshStatus(): void {
     if (!this.ready) return;
+    if (this.inCall) {
+      this.update({ status: "talking", message: "In live call · Tap End to hang up", inLiveCall: true, callState: "in-call" });
+      return;
+    }
+    if (this.snapshot?.call && !this.snapshot.call.participants.includes(this.connectionId)) {
+      this.update({ status: "ringing", message: "Incoming live call…", inLiveCall: false, callState: "ringing" });
+      return;
+    }
+    if (this.liveCall) {
+      this.update({ status: "ringing", message: "Calling group… waiting for someone to join", inLiveCall: true, callState: "ringing" });
+      return;
+    }
     if (this.calling) {
-      this.update({ status: "calling", message: "Calling group… waiting for peers to join" });
+      this.update({ status: "calling", message: "Calling group… waiting for peers to join", inLiveCall: false, callState: null });
       return;
     }
     const speaker = this.snapshot?.speaker;
-    if (this.leaseId) this.update({ status: "talking", message: "Talking live · release to listen" });
-    else if (speaker && speaker.connection_id !== this.connectionId) {
+    if (this.leaseId) {
+      this.update({
+        status: "talking",
+        message: "Talking live · release to listen",
+        inLiveCall: false,
+        callState: null,
+      });
+    } else if (speaker && speaker.connection_id !== this.connectionId) {
       const name = this.snapshot?.clients.find(peer => peer.connection_id === speaker.connection_id)?.name || "Your friend";
-      this.update({ status: "listening", message: `${name} is talking` });
-    } else this.update({ status: "ready", message: "Channel ready · hold to talk" });
+      this.update({ status: "listening", message: `${name} is talking`, inLiveCall: false, callState: null });
+    } else {
+      this.update({ status: "ready", message: "Channel ready · hold to talk or tap Live", inLiveCall: false, callState: null });
+    }
   }
 
   private hasPublication(target: string): boolean {
@@ -382,8 +528,11 @@ export class WalkieTalkieSession {
   }
 
   private applyPlaybackGate(): void {
+    const call = this.snapshot?.call;
+    const inCall = Boolean(call && call.participants.includes(this.connectionId) && call.participants.length >= 2);
     for (const [id, receiver] of this.receivers) {
-      const muted = this.snapshot?.speaker?.connection_id !== id;
+      // Live call: hear every other participant. PTT: hear only the speaker.
+      const muted = inCall ? id === this.connectionId : this.snapshot?.speaker?.connection_id !== id;
       const wasMuted = receiver.audio.muted;
       receiver.audio.muted = muted;
       if (wasMuted && !muted) void receiver.audio.play().catch(() => this.update({ playbackBlocked: true }));
@@ -416,20 +565,25 @@ export class WalkieTalkieSession {
   }
 
   pause(showMessage = true): void {
+    this.liveCall = false;
+    this.inCall = false;
+    this.pendingLiveCall = false;
+    this.pendingCallJoin = false;
     this.pendingPress = false;
     this.calling = false;
     clearTimeout(this.callTimer);
-    this.release();
+    this.release(true);
     this.enabled = false; this.ready = false; this.generation++;
-    clearInterval(this.heartbeat); clearTimeout(this.reconnectTimer);
+    clearTimeout(this.reconnectTimer);
     clearTimeout(this.publisherDisconnectTimer); clearTimeout(this.stableTimer);
     this.receiverRetries.forEach(retry => clearTimeout(retry.timer)); this.receiverRetries.clear();
     this.controller.abort();
-    if (this.socket) { this.socket.onclose = null; this.socket.onerror = null; this.socket.onmessage = null; this.socket.close(); this.socket = undefined; }
+    // Leave this group on the shared socket; the socket itself stays open.
+    this.unsubscribeWalkie?.(); this.unsubscribeWalkie = undefined;
     if (this.publisher) { this.publisher.onconnectionstatechange = null; this.publisher.close(); this.publisher = undefined; }
     this.microphone?.getTracks().forEach(track => { track.onended = null; track.stop(); }); this.microphone = undefined;
     this.receivers.forEach(receiver => this.closeReceiver(receiver)); this.receivers.clear();
     this.connectionId = ""; this.snapshot = undefined; this.queue = Promise.resolve();
-    this.update({ peers: [], speaker: null, playbackBlocked: false, ...(showMessage ? { status: "activation" as const, message: "Audio paused. Enable audio to listen and talk again." } : {}) });
+    this.update({ peers: [], speaker: null, playbackBlocked: false, inLiveCall: false, callState: null, ...(showMessage ? { status: "activation" as const, message: "Audio paused. Enable audio to listen and talk again." } : {}) });
   }
 }

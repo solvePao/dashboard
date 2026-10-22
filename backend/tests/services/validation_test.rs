@@ -1,8 +1,8 @@
 use backend::models::device::WidgetSaveItem;
 use backend::services::validation::{
-    derive_short_code, normalize_code_or_session, normalize_device_name,
+    derive_short_code, normalize_code_or_session, normalize_device_name, normalize_group_name,
     normalize_session_lookup, normalize_widget_config, normalize_widget_key, normalize_widgets,
-    present_short_code, validate_session_id,
+    present_short_code, validate_device_code, validate_session_id,
 };
 
 #[test]
@@ -130,4 +130,47 @@ fn normalize_widgets_body_cases() {
     let err = normalize_widgets(Some(&too_many)).unwrap_err();
     assert_eq!(err.status, 400);
     assert_eq!(err.message, "Too many widgets.");
+}
+
+#[test]
+fn validate_device_code_accepts_six_digits() {
+    assert!(validate_device_code("000000").is_ok());
+    assert!(validate_device_code("482913").is_ok());
+}
+
+#[test]
+fn validate_device_code_rejects() {
+    // Wrong byte length fails on the length check ("é" is two bytes).
+    for bad in ["", "12345", "1234567", " 123456", "123456 ", "12345é"] {
+        assert!(validate_device_code(bad).is_err(), "accepted {bad:?}");
+    }
+    // Right length but non-digit fails on the digit check.
+    for bad in ["12345a", "12 456", "abcdef", "12345 "] {
+        assert!(validate_device_code(bad).is_err(), "accepted {bad:?}");
+    }
+    let err = validate_device_code("abc").unwrap_err();
+    assert_eq!(err.status, 400);
+    assert_eq!(err.message, "Enter a six-digit device code.");
+}
+
+#[test]
+fn normalize_group_name_trims_and_accepts() {
+    assert_eq!(normalize_group_name(Some("  Hike Club  ")).unwrap(), "Hike Club");
+    assert_eq!(normalize_group_name(Some("a")).unwrap(), "a");
+    let sixty = "g".repeat(60);
+    assert_eq!(normalize_group_name(Some(&sixty)).unwrap(), sixty);
+    // Character count (not byte length) decides: 60 multibyte chars fit.
+    let uni_sixty = "é".repeat(60);
+    assert_eq!(normalize_group_name(Some(&uni_sixty)).unwrap(), uni_sixty);
+}
+
+#[test]
+fn normalize_group_name_rejects() {
+    assert!(normalize_group_name(None).is_err());
+    assert!(normalize_group_name(Some("")).is_err());
+    assert!(normalize_group_name(Some("   ")).is_err());
+    assert!(normalize_group_name(Some(&"g".repeat(61))).is_err());
+    let err = normalize_group_name(None).unwrap_err();
+    assert_eq!(err.status, 400);
+    assert_eq!(err.message, "Use a group name of 1–60 characters.");
 }

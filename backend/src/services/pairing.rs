@@ -10,7 +10,7 @@ use worker::*;
 use super::store::{DeviceNotifier, HubNotifier, PairingClient};
 #[cfg(not(any(test, coverage)))]
 #[cfg(not(test))]
-use crate::common::{DeviceLifecycleKind, DEVICE_BINDING_NAME, HUB_BINDING_NAME, PAIRING_BINDING_NAME};
+use crate::common::{DeviceLifecycleKind, PAIRING_BINDING_NAME};
 #[cfg(not(any(test, coverage)))]
 #[cfg(not(test))]
 use crate::models::auth::User;
@@ -82,6 +82,7 @@ impl DoPairingClient {
         headers
             .set("content-type", "application/json")
             .map_err(|_| AppError::internal("Failed to build pairing request."))?;
+        let _ = headers.set("x-session-id", session_id);
         let mut init = RequestInit::new();
         init.method = Method::Post;
         init.headers = headers;
@@ -179,12 +180,26 @@ pub fn map_commit_status(status: u16) -> AppResult<bool> {
 #[cfg(not(test))]
 impl DoDeviceNotifier {
     pub fn from_env(env: &Env) -> AppResult<Self> {
-        let namespace = env.durable_object(DEVICE_BINDING_NAME).map_err(|_| {
+        let namespace = env.durable_object(crate::common::GATEWAY_BINDING_NAME).map_err(|_| {
             AppError::service_unavailable(format!(
-                "Durable Object binding '{DEVICE_BINDING_NAME}' is not configured."
+                "Durable Object binding '{}' is not configured.",
+                crate::common::GATEWAY_BINDING_NAME
             ))
         })?;
         Ok(Self { namespace })
+    }
+
+    async fn deliver(&self, device_token: &str, payload: serde_json::Value) {
+        let Ok(stub) = self.namespace.get_by_name(&crate::common::gateway_device_name(device_token)) else { return };
+        let body = serde_json::json!({"channel": "device", "payload": payload});
+        let headers = Headers::new();
+        let _ = headers.set("content-type", "application/json");
+        let mut init = RequestInit::new();
+        init.method = Method::Post;
+        init.headers = headers;
+        init.body = Some(body.to_string().into());
+        let Ok(req) = Request::new_with_init("https://gateway/deliver", &init) else { return };
+        let _ = stub.fetch_with_request(req).await;
     }
 }
 
@@ -192,32 +207,15 @@ impl DoDeviceNotifier {
 #[cfg(not(test))]
 impl DeviceNotifier for DoDeviceNotifier {
     async fn notify_revoked(&self, device_token: &str) {
-        // Best-effort push; errors are intentionally swallowed.
-        let Ok(stub) = self.namespace.get_by_name(device_token) else { return };
-        let mut init = RequestInit::new();
-        init.method = Method::Post;
-        let Ok(req) = Request::new_with_init("https://device/revoke", &init) else { return };
-        let _ = stub.fetch_with_request(req).await;
+        self.deliver(device_token, crate::objects::revoked_payload()).await;
     }
 
     async fn notify_widgets_updated(&self, device_token: &str) {
-        // Best-effort push; errors are intentionally swallowed.
-        let Ok(stub) = self.namespace.get_by_name(device_token) else { return };
-        let mut init = RequestInit::new();
-        init.method = Method::Post;
-        let Ok(req) = Request::new_with_init("https://device/widgets", &init) else { return };
-        let _ = stub.fetch_with_request(req).await;
+        self.deliver(device_token, crate::objects::widgets_updated_payload()).await;
     }
 
     async fn notify_walkie_activate(&self, device_token: &str, group_id: &str) {
-        // Best-effort push; errors are intentionally swallowed.
-        let Ok(stub) = self.namespace.get_by_name(device_token) else { return };
-        let mut init = RequestInit::new();
-        init.method = Method::Post;
-        let body = serde_json::json!({ "group_id": group_id });
-        init.body = Some(body.to_string().into());
-        let Ok(req) = Request::new_with_init("https://device/walkie-activate", &init) else { return };
-        let _ = stub.fetch_with_request(req).await;
+        self.deliver(device_token, crate::objects::walkie_activate_payload(group_id)).await;
     }
 }
 
@@ -225,9 +223,10 @@ impl DeviceNotifier for DoDeviceNotifier {
 #[cfg(not(test))]
 impl DoHubNotifier {
     pub fn from_env(env: &Env) -> AppResult<Self> {
-        let namespace = env.durable_object(HUB_BINDING_NAME).map_err(|_| {
+        let namespace = env.durable_object(crate::common::GATEWAY_BINDING_NAME).map_err(|_| {
             AppError::service_unavailable(format!(
-                "Durable Object binding '{HUB_BINDING_NAME}' is not configured."
+                "Durable Object binding '{}' is not configured.",
+                crate::common::GATEWAY_BINDING_NAME
             ))
         })?;
         Ok(Self { namespace })
@@ -239,7 +238,7 @@ impl DoHubNotifier {
 impl HubNotifier for DoHubNotifier {
     async fn notify_hub(&self, user_id: i64, kind: DeviceLifecycleKind, device_token: Option<&str>) {
         // Best-effort push; errors are intentionally swallowed.
-        let Ok(stub) = self.namespace.get_by_name(&user_id.to_string()) else { return };
+        let Ok(stub) = self.namespace.get_by_name(&crate::common::gateway_user_name(user_id)) else { return };
         let Ok(json) = serde_json::to_string(&HubEventRequest {
             kind,
             token: device_token.map(str::to_string),
@@ -254,7 +253,7 @@ impl HubNotifier for DoHubNotifier {
         init.method = Method::Post;
         init.headers = headers;
         init.body = Some(JsValue::from_str(&json));
-        let Ok(req) = Request::new_with_init("https://hub/event", &init) else { return };
+        let Ok(req) = Request::new_with_init("https://gateway/hub-event", &init) else { return };
         let _ = stub.fetch_with_request(req).await;
     }
 }

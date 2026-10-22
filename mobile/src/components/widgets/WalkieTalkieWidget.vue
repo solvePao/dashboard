@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { Radio, Volume2, Pause, KeyRound, AlertCircle } from "@lucide/vue";
+import { Radio, Volume2, Pause, KeyRound, AlertCircle, PhoneCall, PhoneOff } from "@lucide/vue";
 import WalkieAvatarCluster from "./WalkieAvatarCluster.vue";
 import WalkiePTTButton from "./WalkiePTTButton.vue";
 import WalkieActivityToast from "./WalkieActivityToast.vue";
@@ -15,6 +15,9 @@ const {
   pause,
   press,
   release,
+  inLiveCall,
+  callState,
+  toggleLiveCall,
   resumePlayback,
   groups,
   otherActivity,
@@ -25,8 +28,9 @@ const {
 
 const codeSheetOpen = ref(false);
 
-const active = computed(() => ["ready", "calling", "talking", "listening", "busy"].includes(state.value.status));
+const active = computed(() => ["ready", "calling", "ringing", "talking", "listening", "busy"].includes(state.value.status));
 const connecting = computed(() => ["connecting", "reconnecting"].includes(state.value.status));
+const liveButtonLabel = computed(() => inLiveCall.value ? "End" : callState.value === "ringing" ? "Join" : "Live");
 const currentSpeaker = computed(() => {
   if (!state.value.speaker) return null;
   return state.value.members.find(m => m.device_id === state.value.speaker?.device_id)
@@ -36,7 +40,7 @@ const currentSpeaker = computed(() => {
 
 <template>
   <section
-    class="walkie-widget relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-card text-card-foreground select-none"
+    class="walkie-widget relative flex h-full min-h-0 w-full flex-col overflow-y-auto bg-card text-card-foreground select-none"
     aria-label="Walkie-talkie"
   >
     <!-- Header -->
@@ -127,8 +131,8 @@ const currentSpeaker = computed(() => {
       </div>
     </div>
 
-    <!-- Main content (zero-scroll compact layout) -->
-    <div class="flex flex-1 min-h-0 flex-col items-center justify-between px-3 py-2 overflow-hidden">
+    <!-- Main content (smooth scrollable compact layout) -->
+    <div class="flex flex-1 min-h-0 flex-col items-center justify-between px-3 py-2 overflow-y-auto">
       <!-- Top section: Members & Speaker status -->
       <div class="flex flex-col items-center gap-1 w-full shrink-0">
         <template v-if="groupId">
@@ -178,18 +182,37 @@ const currentSpeaker = computed(() => {
         </template>
       </div>
 
-      <!-- Center: PTT Button -->
+      <!-- Center: Call Actions (PTT + Live Call) -->
       <div class="my-auto py-1 flex flex-col items-center shrink-0">
-        <WalkiePTTButton
-          :status="state.status"
-          :active="active"
-          @press="press"
-          @release="release"
-        />
+        <div class="flex items-center justify-center gap-3 sm:gap-4">
+          <WalkiePTTButton
+            :status="state.status"
+            :active="active"
+            @press="press"
+            @release="release"
+          />
+
+          <!-- Live Call Toggle Button -->
+          <button
+            type="button"
+            class="walkie-live-call-btn flex h-14 w-14 sm:h-16 sm:w-16 flex-col items-center justify-center gap-0.5 rounded-full border-2 shadow-md transition-all active:scale-95 disabled:opacity-50"
+            :class="inLiveCall
+              ? 'border-rose-400 bg-rose-600 text-white shadow-rose-600/30 animate-pulse'
+              : 'border-emerald-500/40 bg-emerald-600/10 text-emerald-500 hover:bg-emerald-600/20 shadow-emerald-500/10'"
+            :disabled="!groupId || switching"
+            :aria-label="inLiveCall ? 'End live call' : callState === 'ringing' ? 'Join live call' : 'Start live call'"
+            :title="inLiveCall ? 'End live call' : callState === 'ringing' ? 'Join live call' : 'Start hands-free live call'"
+            @click="toggleLiveCall"
+          >
+            <PhoneOff v-if="inLiveCall" class="h-5 w-5 sm:h-6 sm:w-6" />
+            <PhoneCall v-else class="h-5 w-5 sm:h-6 sm:w-6" />
+            <span class="text-[9px] font-semibold">{{ liveButtonLabel }}</span>
+          </button>
+        </div>
 
         <!-- Status message line -->
         <p class="mt-1 max-w-60 text-center text-[11px] text-muted-foreground" role="status" aria-live="polite">
-          {{ state.message }}
+          {{ inLiveCall ? 'In live call · Tap End to hang up' : state.message }}
         </p>
 
         <!-- Enable Audio Action -->
