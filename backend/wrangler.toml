@@ -18,13 +18,13 @@ binding = "dashboard"
 database_name = "dashboard"
 database_id = "9f4dde3a-c017-4f06-89ac-15a6b9ea1b9b"
 
-# One PairingObject instance per pairing session (idFromName(session_id)).
-# One DeviceObject instance per active device token (idFromName(device_token)).
+# PairingObject: pairing state referee only (no client socket).
+# ClientGatewayObject: the ONLY client WebSocket, one per client identity.
+# WalkieGroupObject: per-group coordinator only (no client socket).
 [durable_objects]
 bindings = [
   { name = "PAIRING_OBJECT", class_name = "PairingObject" },
-  { name = "DEVICE_OBJECT", class_name = "DeviceObject" },
-  { name = "DEVICES_HUB", class_name = "DevicesHubObject" },
+  { name = "CLIENT_GATEWAY", class_name = "ClientGatewayObject" },
   { name = "WALKIE_GROUP", class_name = "WalkieGroupObject" },
 ]
 
@@ -43,6 +43,14 @@ new_sqlite_classes = ["DevicesHubObject"]
 [[migrations]]
 tag = "v4"
 new_sqlite_classes = ["WalkieGroupObject"]
+
+[[migrations]]
+tag = "v5"
+new_sqlite_classes = ["ClientGatewayObject"]
+
+[[migrations]]
+tag = "v6"
+deleted_classes = ["DeviceObject", "DevicesHubObject"]
 
 # Production bindings must be declared explicitly: environments do not inherit them.
 [env.production]
@@ -69,8 +77,7 @@ migrations_dir = "migrations"
 [env.production.durable_objects]
 bindings = [
   { name = "PAIRING_OBJECT", class_name = "PairingObject" },
-  { name = "DEVICE_OBJECT", class_name = "DeviceObject" },
-  { name = "DEVICES_HUB", class_name = "DevicesHubObject" },
+  { name = "CLIENT_GATEWAY", class_name = "ClientGatewayObject" },
   { name = "WALKIE_GROUP", class_name = "WalkieGroupObject" },
 ]
 

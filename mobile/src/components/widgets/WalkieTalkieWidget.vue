@@ -16,6 +16,7 @@ const {
   press,
   release,
   inLiveCall,
+  callState,
   toggleLiveCall,
   resumePlayback,
   groups,
@@ -27,8 +28,9 @@ const {
 
 const codeSheetOpen = ref(false);
 
-const active = computed(() => ["ready", "calling", "talking", "listening", "busy"].includes(state.value.status));
+const active = computed(() => ["ready", "calling", "ringing", "talking", "listening", "busy"].includes(state.value.status));
 const connecting = computed(() => ["connecting", "reconnecting"].includes(state.value.status));
+const liveButtonLabel = computed(() => inLiveCall.value ? "End" : callState.value === "ringing" ? "Join" : "Live");
 const currentSpeaker = computed(() => {
   if (!state.value.speaker) return null;
   return state.value.members.find(m => m.device_id === state.value.speaker?.device_id)
@@ -197,14 +199,14 @@ const currentSpeaker = computed(() => {
             :class="inLiveCall
               ? 'border-rose-400 bg-rose-600 text-white shadow-rose-600/30 animate-pulse'
               : 'border-emerald-500/40 bg-emerald-600/10 text-emerald-500 hover:bg-emerald-600/20 shadow-emerald-500/10'"
-            :disabled="!active && !connecting"
-            :aria-label="inLiveCall ? 'End live call' : 'Start live call'"
-            :title="inLiveCall ? 'End live call' : 'Start hands-free live call'"
+            :disabled="!groupId || switching"
+            :aria-label="inLiveCall ? 'End live call' : callState === 'ringing' ? 'Join live call' : 'Start live call'"
+            :title="inLiveCall ? 'End live call' : callState === 'ringing' ? 'Join live call' : 'Start hands-free live call'"
             @click="toggleLiveCall"
           >
             <PhoneOff v-if="inLiveCall" class="h-5 w-5 sm:h-6 sm:w-6" />
             <PhoneCall v-else class="h-5 w-5 sm:h-6 sm:w-6" />
-            <span class="text-[9px] font-semibold">{{ inLiveCall ? 'End' : 'Live' }}</span>
+            <span class="text-[9px] font-semibold">{{ liveButtonLabel }}</span>
           </button>
         </div>
 

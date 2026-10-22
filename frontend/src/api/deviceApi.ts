@@ -2,12 +2,12 @@ import { apiClient, authHeader, ApiError, API_BASE_URL } from "./client";
 import type { DeviceItem, DevicesResponse, AuthorizeDeviceResponse } from "../types/device";
 
 /**
- * WebSocket URL for the per-user devices hub. Authenticates with the
- * HttpOnly session cookie planted at login; no credential in the URL.
+ * Single mux socket URL for the dashboard (channel `hub`). Authenticates
+ * with the HttpOnly session cookie planted at login; no credential in URL.
  */
 export function devicesHubUrl(): string {
   const base = API_BASE_URL.replace(/^http/, "ws");
-  return `${base}/api/devices/live`;
+  return `${base}/api/live`;
 }
 
 export async function fetchDevicesApi(token: string): Promise<DeviceItem[]> {

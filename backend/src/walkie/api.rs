@@ -28,38 +28,8 @@ async fn dispatch(mut req: Request, ctx: RouteContext<()>) -> AppResult<Response
     let method = req.method();
     let mut cleanup_pending = false;
     let group = ctx.param("group").cloned().unwrap_or_default();
-    if path.contains("/socket/") {
-        let origin = crate::utils::request_origin(&req);
-        if !origin.as_deref().is_some_and(|s| {
-            crate::utils::is_origin_allowed(Some(s), &crate::utils::allowed_origins(&ctx.env))
-        }) {
-            return Err(AppError::forbidden("Origin is not allowed."));
-        }
-        let stub = ctx
-            .env
-            .durable_object("WALKIE_GROUP")
-            .and_then(|ns| ns.get_by_name(&group))
-            .map_err(db_error)?;
-        let url = req.url().map_err(db_error)?;
-        let ticket = url
-            .query_pairs()
-            .find(|(k, _)| k == "ticket")
-            .map(|(_, v)| v.into_owned())
-            .unwrap_or_default();
-        if ticket.len() != 64 {
-            return Err(AppError::unauthorized("Connection ticket required."));
-        }
-        let mut init = RequestInit::new();
-        init.with_method(Method::Get);
-        let forwarded =
-            Request::new_with_init(&format!("https://walkie/socket?ticket={ticket}"), &init)
-                .map_err(db_error)?;
-        forwarded
-            .headers()
-            .set("Upgrade", "websocket")
-            .map_err(db_error)?;
-        return stub.fetch_with_request(forwarded).await.map_err(db_error);
-    }
+    // Walkie signalling no longer has a public socket: it rides the single
+    // gateway socket (`/api/live/device/:token`, channel `walkie`).
     let token = crate::utils::parse_bearer_header(
         req.headers()
             .get("Authorization")
@@ -77,7 +47,7 @@ async fn dispatch(mut req: Request, ctx: RouteContext<()>) -> AppResult<Response
         let event = body.get("event").and_then(Value::as_str).unwrap_or("");
         let status = body.get("status").and_then(Value::as_str).unwrap_or("");
         if !["enable", "pause", "hidden", "pagehide", "unmount", "group_changed", "selection_lost"].contains(&event)
-            || !["activation", "connecting", "reconnecting", "ready", "calling", "talking", "listening", "busy", "error"].contains(&status) {
+            || !["activation", "connecting", "reconnecting", "ready", "calling", "ringing", "talking", "listening", "busy", "error"].contains(&status) {
             return Err(AppError::bad_request("Invalid diagnostic event."));
         }
         console_log!("walkie client lifecycle event={} status={}", event, status);

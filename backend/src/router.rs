@@ -12,7 +12,7 @@ pub mod utils;
 
 #[cfg(not(any(test, coverage)))]
 #[cfg(not(test))]
-pub use objects::{DeviceObject, DevicesHubObject, PairingObject};
+pub use objects::{ClientGatewayObject, PairingObject};
 
 #[cfg(not(any(test, coverage)))]
 #[cfg(not(test))]
@@ -58,17 +58,17 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/api/auth/device/check", |req, ctx| async move {
             routes::device::check_session(req, ctx).await
         })
-        .get_async("/api/auth/device/ws/:session_id", |req, ctx| async move {
-            routes::device::pairing_socket(req, ctx).await
+        .get_async("/api/live/pairing/:session_id", |req, ctx| async move {
+            routes::device::live_pairing(req, ctx).await
         })
-        .get_async("/api/devices/live", |req, ctx| async move {
-            routes::device::devices_live(req, ctx).await
+        .get_async("/api/live", |req, ctx| async move {
+            routes::device::live_hub(req, ctx).await
         })
         .get_async("/api/devices", |req, ctx| async move {
             routes::device::get_devices(req, ctx).await
         })
-        .get_async("/api/devices/ws/:token", |req, ctx| async move {
-            routes::device::device_socket(req, ctx).await
+        .get_async("/api/live/device/:token", |req, ctx| async move {
+            routes::device::live_device(req, ctx).await
         })
         .delete_async("/api/devices/:token", |req, ctx| async move {
             routes::device::revoke_device(req, ctx).await
@@ -106,7 +106,6 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/api/walkie-talkie/connect", |req, ctx| async move { walkie::api::handle(req, ctx).await })
         .post_async("/api/walkie-talkie/media", |req, ctx| async move { walkie::api::handle(req, ctx).await })
         .post_async("/api/walkie-talkie/wake", |req, ctx| async move { walkie::api::handle(req, ctx).await })
-        .get_async("/api/walkie-talkie/socket/:group", |req, ctx| async move { walkie::api::handle(req, ctx).await })
         .run(req, env)
         .await?;
 

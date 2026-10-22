@@ -6,9 +6,10 @@ import {
   checkDeviceAuthApi,
   disconnectDeviceApi,
   fetchMeApi,
-  pairingSocketUrl,
-  deviceSocketUrl,
+  livePairingUrl,
+  liveDeviceUrl,
 } from "../api/deviceAuthApi";
+import { liveSocket } from "../services/liveSocket";
 import type { CheckAuthResponse } from "../types/auth";
 import { generateSessionIdHex } from "../services/crypto";
 import {
@@ -31,13 +32,8 @@ const isDisconnecting = ref<boolean>(false);
 const isConfirmingDisconnect = ref<boolean>(false);
 const disconnectError = ref<string>("");
 
-let pairingSocket: WebSocket | null = null;
-let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-let reconnectAttempts = 0;
-
-let deviceSocket: WebSocket | null = null;
-let deviceReconnectTimer: ReturnType<typeof setTimeout> | undefined;
-let deviceReconnectAttempts = 0;
+let pairingUnsubscribe: (() => void) | undefined;
+let deviceUnsubscribe: (() => void) | undefined;
 
 /** Fallback display pairing code when the backend omits short_code. */
 export function deriveShortCode(id: string): string {
@@ -86,69 +82,35 @@ export function useDeviceAuth() {
   const isAuthenticated = computed(() => authState.value === "authorized" && !!user.value);
 
   function closePairingSocket(): void {
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = undefined;
-    }
-    reconnectAttempts = 0;
-    if (pairingSocket) {
-      pairingSocket.onclose = null;
-      pairingSocket.close();
-      pairingSocket = null;
-    }
+    pairingUnsubscribe?.();
+    pairingUnsubscribe = undefined;
   }
 
   function closeDeviceSocket(): void {
-    if (deviceReconnectTimer) {
-      clearTimeout(deviceReconnectTimer);
-      deviceReconnectTimer = undefined;
-    }
-    deviceReconnectAttempts = 0;
-    if (deviceSocket) {
-      deviceSocket.onclose = null;
-      deviceSocket.close();
-      deviceSocket = null;
-    }
+    deviceUnsubscribe?.();
+    deviceUnsubscribe = undefined;
+    liveSocket.disconnect();
   }
 
   function connectDeviceSocket(token: string): void {
     if (!token || authState.value !== "authorized") return;
-    if (deviceSocket && deviceSocket.readyState <= WebSocket.OPEN) return;
-
-    const ws = new WebSocket(deviceSocketUrl(token));
-    deviceSocket = ws;
-
-    ws.onopen = () => {
-      deviceReconnectAttempts = 0;
-    };
-    ws.onmessage = async (event) => {
-      try {
-        const body = JSON.parse(String(event.data)) as DeviceSocketEvent;
-        if (body.status === "revoked") {
-          logger.warn("auth", "Device revoked by web dashboard");
-          closeDeviceSocket();
-          removeStoredDeviceToken();
-          user.value = null;
-          await createSession();
-          statusMessage.value =
-            "Device access was revoked from the web dashboard. Scan QR code to reconnect.";
-        } else if (body.status === "widgets_updated" || body.status === "walkie_activate") {
-          // Notify listeners (widgets refresh, walkie incoming call auto-activates)
-          notifyDeviceSocketListeners(body);
-        }
-      } catch {
-        logger.warn("auth", "Ignored malformed device socket message");
+    liveSocket.connect(liveDeviceUrl(token));
+    if (deviceUnsubscribe) return;
+    deviceUnsubscribe = liveSocket.subscribe("device", async (envelope) => {
+      const body = envelope as DeviceSocketEvent;
+      if (body.status === "revoked") {
+        logger.warn("auth", "Device revoked by web dashboard");
+        closeDeviceSocket();
+        removeStoredDeviceToken();
+        user.value = null;
+        await createSession();
+        statusMessage.value =
+          "Device access was revoked from the web dashboard. Scan QR code to reconnect.";
+      } else if (body.status === "widgets_updated" || body.status === "walkie_activate") {
+        // Notify listeners (widgets refresh, walkie incoming call auto-activates)
+        notifyDeviceSocketListeners(body);
       }
-    };
-    ws.onclose = () => {
-      if (deviceSocket === ws) deviceSocket = null;
-      if (authState.value === "authorized" && getStoredDeviceToken() === token) {
-        const delay = Math.min(1000 * 2 ** deviceReconnectAttempts, 5000);
-        deviceReconnectAttempts += 1;
-        deviceReconnectTimer = setTimeout(() => connectDeviceSocket(token), delay);
-      }
-    };
-    ws.onerror = () => ws.close();
+    });
   }
 
   function applyAuthorized(body: CheckAuthResponse): boolean {
@@ -171,37 +133,13 @@ export function useDeviceAuth() {
 
   function connectPairingSocket(): void {
     if (!sessionId.value || authState.value === "authorized") return;
-    if (pairingSocket && pairingSocket.readyState <= WebSocket.OPEN) return;
-
-    const ws = new WebSocket(pairingSocketUrl(sessionId.value));
-    pairingSocket = ws;
-
-    ws.onopen = () => {
-      reconnectAttempts = 0;
-    };
-    ws.onmessage = (event) => {
-      try {
-        const body = JSON.parse(String(event.data)) as CheckAuthResponse;
-        if (applyAuthorized(body)) return;
-        if (body.status === "expired") applyExpired();
-      } catch {
-        logger.warn("auth", "Ignored malformed pairing message");
-      }
-    };
-    ws.onclose = () => {
-      if (pairingSocket === ws) pairingSocket = null;
-      // Reconnect while the 2-minute pairing window is still open;
-      // the object replays a finished result on reconnect.
-      if (
-        sessionId.value &&
-        (authState.value === "pending" || authState.value === "checking")
-      ) {
-        const delay = Math.min(1000 * 2 ** reconnectAttempts, 5000);
-        reconnectAttempts += 1;
-        reconnectTimer = setTimeout(connectPairingSocket, delay);
-      }
-    };
-    ws.onerror = () => ws.close();
+    liveSocket.connect(livePairingUrl(sessionId.value));
+    if (pairingUnsubscribe) return;
+    pairingUnsubscribe = liveSocket.subscribe("pairing", (envelope) => {
+      const body = envelope as unknown as CheckAuthResponse;
+      if (applyAuthorized(body)) return;
+      if (body.status === "expired") applyExpired();
+    });
   }
 
   async function restoreExistingToken(): Promise<boolean> {

@@ -86,7 +86,9 @@ export function useWalkieTalkie(groupId: Ref<string | null>) {
   const unsubscribeDeviceSocket = subscribeDeviceSocket(event => {
     if (event.status === "walkie_activate") {
       if (!event.group_id || event.group_id === groupId.value) {
-        if (state.value.status === "activation") {
+        // Someone started talking: enable audio automatically on this side.
+        // (First-ever use still needs the one-time mic grant inside Enable audio.)
+        if (state.value.status === "activation" || state.value.status === "error") {
           state.value = { ...state.value, message: "Incoming call… connecting audio" };
           diagnostic("wake_enable");
           void session?.enable();
@@ -112,6 +114,7 @@ export function useWalkieTalkie(groupId: Ref<string | null>) {
     switching,
     otherActivity: computed(() => activity.value.filter(item => item.groupId !== groupId.value)),
     inLiveCall: computed(() => state.value.inLiveCall || false),
+    callState: computed(() => state.value.callState || null),
     switchGroup,
     enable: (autoPress = false) => { diagnostic("enable"); return session?.enable(autoPress); },
     pause: () => { diagnostic("pause"); pause(); },
@@ -120,6 +123,7 @@ export function useWalkieTalkie(groupId: Ref<string | null>) {
     startLiveCall: () => session?.startLiveCall(),
     endLiveCall: () => session?.endLiveCall(),
     toggleLiveCall: () => session?.toggleLiveCall(),
+    joinLiveCall: () => session?.joinLiveCall(),
     resumePlayback: () => session?.resumePlayback()
   };
 }

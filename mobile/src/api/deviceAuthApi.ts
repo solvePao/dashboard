@@ -1,16 +1,16 @@
 import { apiClient, API_BASE_URL } from "./client";
 import type { SessionResponse, CheckAuthResponse, MeResponse } from "../types/auth";
 
-/** WebSocket URL for the pairing push channel of one session. */
-export function pairingSocketUrl(sessionId: string): string {
+/** Single mux socket URL (pairing phase): channel `pairing`. */
+export function livePairingUrl(sessionId: string): string {
   const base = API_BASE_URL.replace(/^http/, "ws");
-  return `${base}/api/auth/device/ws/${sessionId}`;
+  return `${base}/api/live/pairing/${sessionId}`;
 }
 
-/** WebSocket URL for real-time revocation push channel of an authorized device. */
-export function deviceSocketUrl(token: string): string {
+/** Single mux socket URL (authorized): channels `device` + `walkie`. */
+export function liveDeviceUrl(token: string): string {
   const base = API_BASE_URL.replace(/^http/, "ws");
-  return `${base}/api/devices/ws/${token}`;
+  return `${base}/api/live/device/${token}`;
 }
 
 export async function createDeviceSessionApi(
