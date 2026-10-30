@@ -109,7 +109,7 @@ async function run(action: () => Promise<void>): Promise<void> {
   try {
     await action();
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "Unable to update walkie-talkie groups.";
+    error.value = cause instanceof Error ? cause.message : "Unable to update Caller groups.";
     await refresh().catch(() => undefined);
     emit("changed");
   } finally {
@@ -334,17 +334,17 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="relative space-y-4 rounded-xl border border-border bg-card p-3.5 sm:p-5 overflow-hidden" aria-label="Walkie-talkie groups">
+  <section class="relative space-y-4 rounded-xl border border-border bg-card p-3.5 sm:p-5 overflow-hidden" aria-label="Caller groups">
     <!-- Header -->
     <div class="border-b border-border/70 pb-4">
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <div class="flex items-center justify-between sm:justify-start gap-2">
             <div class="flex items-center gap-2">
-              <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <div class="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-primary">
                 <Radio class="h-4 w-4" />
               </div>
-              <h4 class="text-sm font-semibold tracking-tight text-foreground">Walkie-talkie</h4>
+              <h4 class="text-sm font-semibold tracking-tight text-foreground">Caller</h4>
             </div>
 
             <!-- Mobile-only switch placed in top row -->
@@ -353,7 +353,7 @@ onUnmounted(() => {
                 type="button"
                 role="switch"
                 :aria-checked="enabled"
-                aria-label="Turn Walkie-talkie on or off for this mobile device"
+                aria-label="Turn Caller on or off for this mobile device"
                 :disabled="busy || saving"
                 class="relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                 :class="enabled ? 'bg-primary' : 'bg-muted'"
@@ -376,13 +376,13 @@ onUnmounted(() => {
         </div>
 
         <!-- Desktop Controls (hidden on mobile, visible on sm:) -->
-        <div class="hidden sm:flex items-center gap-2.5">
+        <div class="hidden shrink-0 sm:flex items-center gap-2.5">
           <div class="flex items-center gap-2">
             <button
               type="button"
               role="switch"
               :aria-checked="enabled"
-              aria-label="Turn Walkie-talkie on or off for this mobile device"
+              aria-label="Turn Caller on or off for this mobile device"
               :disabled="busy || saving"
               class="relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
               :class="enabled ? 'bg-primary' : 'bg-muted'"
@@ -401,7 +401,7 @@ onUnmounted(() => {
           <button
             type="button"
             :disabled="busy || saving"
-            class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted transition active:scale-95 disabled:opacity-50"
+            class="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted transition active:scale-95 disabled:opacity-50"
             title="Refresh groups"
             @click="run(refresh)"
           >
@@ -412,7 +412,7 @@ onUnmounted(() => {
           <button
             type="button"
             :disabled="busy || saving"
-            class="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 transition active:scale-95 disabled:opacity-50"
+            class="inline-flex items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 transition active:scale-95 disabled:opacity-50"
             @click="openCreatePanel"
           >
             <Plus class="h-3.5 w-3.5" />
@@ -425,7 +425,7 @@ onUnmounted(() => {
           <button
             type="button"
             :disabled="busy || saving"
-            class="inline-flex flex-1 min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium text-foreground hover:bg-muted active:scale-[0.98] transition disabled:opacity-50"
+            class="inline-flex flex-1 min-h-[44px] items-center justify-center gap-1.5 rounded-full border border-border bg-background px-3 py-2 text-xs font-medium text-foreground hover:bg-muted active:scale-[0.98] transition disabled:opacity-50"
             title="Refresh groups"
             @click="run(refresh)"
           >
@@ -436,7 +436,7 @@ onUnmounted(() => {
           <button
             type="button"
             :disabled="busy || saving"
-            class="inline-flex flex-1 min-h-[44px] items-center justify-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 active:scale-[0.98] transition disabled:opacity-50"
+            class="inline-flex flex-1 min-h-[44px] items-center justify-center gap-1.5 rounded-full bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 active:scale-[0.98] transition disabled:opacity-50"
             @click="openCreatePanel"
           >
             <Plus class="h-3.5 w-3.5" />
@@ -448,7 +448,7 @@ onUnmounted(() => {
 
     <!-- Disabled notice -->
     <div v-if="!enabled" class="rounded-lg bg-muted/60 p-3 text-xs text-muted-foreground">
-      Walkie-talkie is currently disabled on this mobile device. Its group memberships remain intact.
+      Caller is currently disabled on this mobile device. Its group memberships remain intact.
     </div>
 
     <!-- Alerts -->
@@ -475,7 +475,7 @@ onUnmounted(() => {
           </p>
           <button
             type="button"
-            class="mt-3 inline-flex min-h-[44px] sm:min-h-0 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 py-2 sm:px-3 sm:py-1.5 text-xs font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 transition active:scale-95"
+            class="mt-3 inline-flex min-h-[44px] sm:min-h-0 items-center justify-center gap-1.5 rounded-full bg-primary px-4 py-2 sm:px-3 sm:py-1.5 text-xs font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 transition active:scale-95"
             @click="openCreatePanel"
           >
             <Plus class="h-3.5 w-3.5" />
@@ -497,7 +497,7 @@ onUnmounted(() => {
                 <!-- Group info -->
                 <div class="flex items-start sm:items-center gap-3 min-w-0">
                   <div
-                    class="flex h-10 w-10 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-xl transition-colors"
+                    class="flex h-10 w-10 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-full transition-colors"
                     :class="group.active ? 'bg-emerald-500/15 text-emerald-500' : 'bg-muted text-muted-foreground'"
                   >
                     <Radio class="h-4 w-4" />
@@ -535,7 +535,7 @@ onUnmounted(() => {
                     v-if="!group.active && group.joined"
                     type="button"
                     :disabled="busy || saving"
-                    class="flex-1 sm:flex-none min-h-[44px] sm:min-h-0 inline-flex items-center justify-center rounded-lg border border-border bg-background px-3 py-2 sm:px-2.5 sm:py-1 text-xs font-medium text-foreground hover:bg-muted active:scale-[0.98] transition disabled:opacity-50"
+                    class="flex-1 sm:flex-none min-h-[44px] sm:min-h-0 inline-flex items-center justify-center rounded-full border border-border bg-background px-3 py-2 sm:px-2.5 sm:py-1 text-xs font-medium text-foreground hover:bg-muted active:scale-[0.98] transition disabled:opacity-50"
                     @click="activate(group.id)"
                   >
                     Make active
@@ -544,7 +544,7 @@ onUnmounted(() => {
                   <button
                     type="button"
                     :disabled="busy || saving"
-                    class="flex-1 sm:flex-none min-h-[44px] sm:min-h-0 inline-flex items-center justify-center rounded-lg border border-border bg-background px-3 py-2 sm:px-2.5 sm:py-1 text-xs font-medium text-foreground hover:bg-muted active:scale-[0.98] transition disabled:opacity-50"
+                    class="flex-1 sm:flex-none min-h-[44px] sm:min-h-0 inline-flex items-center justify-center rounded-full border border-border bg-background px-3 py-2 sm:px-2.5 sm:py-1 text-xs font-medium text-foreground hover:bg-muted active:scale-[0.98] transition disabled:opacity-50"
                     @click="openPanel(group, 'manage')"
                   >
                     Manage
@@ -557,7 +557,7 @@ onUnmounted(() => {
                         type="button"
                         :disabled="busy || saving"
                         :aria-label="`Options for ${group.name}`"
-                        class="flex h-11 w-11 sm:h-7 sm:w-7 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground active:scale-95 transition disabled:opacity-50"
+                        class="flex h-11 w-11 sm:h-7 sm:w-7 shrink-0 items-center justify-center rounded-full border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground active:scale-95 transition disabled:opacity-50"
                       >
                         <MoreHorizontal class="h-4 w-4 sm:h-3.5 sm:w-3.5" />
                       </button>
@@ -639,11 +639,11 @@ onUnmounted(() => {
             <div class="min-w-0 pr-2">
               <h5 class="text-sm font-semibold truncate text-foreground">{{ title }}</h5>
               <p v-if="selected" class="text-xs text-muted-foreground truncate">{{ selected.name }} · {{ selected.members.length }}/5 devices</p>
-              <p v-else-if="panel === 'create'" class="text-xs text-muted-foreground truncate">Create a new push-to-talk channel</p>
+              <p v-else-if="panel === 'create'" class="text-xs text-muted-foreground truncate">Create a new calling group</p>
             </div>
             <button
               type="button"
-              class="flex h-9 w-9 sm:h-8 sm:w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground active:scale-95 transition-colors"
+              class="flex h-9 w-9 sm:h-8 sm:w-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground active:scale-95 transition-colors"
               aria-label="Close panel"
               @click="closePanel"
             >
@@ -659,7 +659,7 @@ onUnmounted(() => {
             <form class="space-y-4" @submit.prevent="createGroup">
               <div>
                 <p class="text-xs text-muted-foreground leading-relaxed">
-                  Name your group to start push-to-talk voice communication across paired devices.
+                  Name your group to start live audio calls across paired devices. Each recipient chooses when to pick up.
                 </p>
                 <label class="mt-3 block text-xs font-semibold text-foreground">
                   Group name
@@ -678,13 +678,13 @@ onUnmounted(() => {
                 <button
                   type="submit"
                   :disabled="!newName.trim() || busy || saving"
-                  class="w-full sm:flex-1 min-h-[44px] inline-flex items-center justify-center rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 active:scale-[0.98] transition disabled:opacity-50"
+                  class="w-full sm:flex-1 min-h-[44px] inline-flex items-center justify-center rounded-full bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 active:scale-[0.98] transition disabled:opacity-50"
                 >
                   Create group
                 </button>
                 <button
                   type="button"
-                  class="w-full sm:flex-none min-h-[44px] inline-flex items-center justify-center rounded-lg border border-border bg-background px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground active:scale-[0.98] transition"
+                  class="w-full sm:flex-none min-h-[44px] inline-flex items-center justify-center rounded-full border border-border bg-background px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground active:scale-[0.98] transition"
                   @click="closePanel"
                 >
                   Cancel
@@ -698,7 +698,7 @@ onUnmounted(() => {
             <div class="space-y-4">
               <form v-if="!preview" class="space-y-4" @submit.prevent="previewDevice">
                 <p class="text-xs text-muted-foreground leading-relaxed">
-                  Open the walkie-talkie screen on the phone you wish to add, tap <strong class="text-foreground">Get device code</strong>, and enter the 6 digits below:
+                  Open Caller on the phone you wish to add, tap <strong class="text-foreground">Get device code</strong>, and enter the 6 digits below:
                 </p>
 
                 <!-- 6-Box Segmented Code Input -->
@@ -770,7 +770,7 @@ onUnmounted(() => {
                   </button>
                   <button
                     type="button"
-                    class="min-h-[44px] inline-flex items-center justify-center rounded-lg border border-border bg-background px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground active:scale-[0.98] transition"
+                    class="min-h-[44px] inline-flex items-center justify-center rounded-full border border-border bg-background px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground active:scale-[0.98] transition"
                     @click="preview = null"
                   >
                     Back
@@ -837,7 +837,7 @@ onUnmounted(() => {
                     <button
                       v-if="(owner || member.device_id === deviceId) && confirmingMemberId !== member.device_id"
                       type="button"
-                      class="min-h-[38px] px-2.5 inline-flex items-center justify-center rounded-lg text-xs font-medium text-destructive hover:bg-destructive/10 active:scale-95 transition"
+                      class="min-h-[38px] px-2.5 inline-flex items-center justify-center rounded-full text-xs font-medium text-destructive hover:bg-destructive/10 active:scale-95 transition"
                       @click="requestRemoveMember(member)"
                     >
                       {{ member.device_id === deviceId ? 'Leave' : 'Remove' }}
@@ -855,14 +855,14 @@ onUnmounted(() => {
                     <div class="flex items-center gap-1.5 shrink-0">
                       <button
                         type="button"
-                        class="min-h-[32px] rounded-md bg-destructive px-2.5 py-1 text-xs font-semibold text-white hover:bg-destructive/90 active:scale-95 transition"
+                        class="min-h-[32px] rounded-full bg-destructive px-2.5 py-1 text-xs font-semibold text-white hover:bg-destructive/90 active:scale-95 transition"
                         @click="confirmRemoveMember(member)"
                       >
                         Yes
                       </button>
                       <button
                         type="button"
-                        class="min-h-[32px] rounded-md border border-border bg-background px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground active:scale-95 transition"
+                        class="min-h-[32px] rounded-full border border-border bg-background px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground active:scale-95 transition"
                         @click="cancelRemoveMember"
                       >
                         Cancel
@@ -895,13 +895,13 @@ onUnmounted(() => {
                 <button
                   type="submit"
                   :disabled="!renameName.trim() || renameName.trim() === selected.name || busy || saving"
-                  class="w-full sm:flex-1 min-h-[44px] inline-flex items-center justify-center rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 active:scale-[0.98] transition disabled:opacity-50"
+                  class="w-full sm:flex-1 min-h-[44px] inline-flex items-center justify-center rounded-full bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 active:scale-[0.98] transition disabled:opacity-50"
                 >
                   Save name
                 </button>
                 <button
                   type="button"
-                  class="w-full sm:flex-none min-h-[44px] inline-flex items-center justify-center rounded-lg border border-border bg-background px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground active:scale-[0.98] transition"
+                  class="w-full sm:flex-none min-h-[44px] inline-flex items-center justify-center rounded-full border border-border bg-background px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground active:scale-[0.98] transition"
                   @click="closePanel"
                 >
                   Cancel
@@ -920,14 +920,14 @@ onUnmounted(() => {
                 <button
                   type="button"
                   :disabled="busy || saving"
-                  class="w-full sm:flex-1 min-h-[44px] inline-flex items-center justify-center rounded-lg bg-destructive py-2 text-xs font-semibold text-white hover:bg-destructive/90 active:scale-[0.98] transition shadow-sm disabled:opacity-50"
+                  class="w-full sm:flex-1 min-h-[44px] inline-flex items-center justify-center rounded-full bg-destructive py-2 text-xs font-semibold text-white hover:bg-destructive/90 active:scale-[0.98] transition shadow-sm disabled:opacity-50"
                   @click="removeGroup"
                 >
                   Confirm delete
                 </button>
                 <button
                   type="button"
-                  class="w-full sm:flex-none min-h-[44px] inline-flex items-center justify-center rounded-lg border border-border bg-background px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground active:scale-[0.98] transition"
+                  class="w-full sm:flex-none min-h-[44px] inline-flex items-center justify-center rounded-full border border-border bg-background px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground active:scale-[0.98] transition"
                   @click="closePanel"
                 >
                   Cancel

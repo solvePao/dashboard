@@ -1,259 +1,123 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { Radio, Volume2, Pause, KeyRound, AlertCircle, PhoneCall, PhoneOff } from "@lucide/vue";
+import { Phone, PhoneOff, Mic, MicOff, KeyRound, Volume2, Users } from "@lucide/vue";
+import { DialogRoot, DialogPortal, DialogOverlay, DialogContent, DialogTitle, DialogDescription, DialogClose } from "reka-ui";
+import { useCaller } from "../../composables/useWalkieTalkie";
 import WalkieAvatarCluster from "./WalkieAvatarCluster.vue";
-import WalkiePTTButton from "./WalkiePTTButton.vue";
-import WalkieActivityToast from "./WalkieActivityToast.vue";
+import WalkieParticipantAvatar from "./WalkieParticipantAvatar.vue";
 import WalkieDeviceCodePanel from "./WalkieDeviceCodePanel.vue";
-import { useWalkieTalkie } from "../../composables/useWalkieTalkie";
+import CallerInvitations from "./CallerInvitations.vue";
 
-const props = defineProps<{ config: Record<string, unknown> }>();
-const groupId = computed(() => typeof props.config.group_id === "string" ? props.config.group_id : null);
-const {
-  state,
-  enable,
-  pause,
-  press,
-  release,
-  inLiveCall,
-  callState,
-  toggleLiveCall,
-  resumePlayback,
-  groups,
-  otherActivity,
-  switchGroup,
-  switching,
-  activityError,
-} = useWalkieTalkie(groupId);
-
+defineProps<{ config: Record<string, unknown> }>();
+const { state, groups, currentGroup, currentGroupId, participants, currentCall, invitations, activityError, switching,
+  busyElsewhere, ringBlocked, previousCall, pendingCalls, waitingModalOpen, inLiveCall, canEndForEveryone, connect, switchGroup, leave, toggleMute, enableSound, rejoinPrevious } = useCaller();
 const codeSheetOpen = ref(false);
-
-const active = computed(() => ["ready", "calling", "ringing", "talking", "listening", "busy"].includes(state.value.status));
-const connecting = computed(() => ["connecting", "reconnecting"].includes(state.value.status));
-const liveButtonLabel = computed(() => inLiveCall.value ? "End" : callState.value === "ringing" ? "Join" : "Live");
-const currentSpeaker = computed(() => {
-  if (!state.value.speaker) return null;
-  return state.value.members.find(m => m.device_id === state.value.speaker?.device_id)
-    || state.value.peers.find(p => p.connection_id === state.value.speaker?.connection_id);
+const confirmEndOpen = ref(false);
+const ringingCalls = computed(() => invitations.value.filter(call => call.ringing));
+const ongoingCalls = computed(() => invitations.value.filter(call => !call.ringing));
+const callStatus = computed(() => {
+  if (switching.value || state.value.status === "connecting") return "Connecting call…";
+  if (state.value.status === "reconnecting") return "Reconnecting…";
+  return currentCall.value?.established ? "In call" : "Calling group…";
 });
+function endForEveryone(): void {
+  confirmEndOpen.value = false;
+  void leave(true);
+}
 </script>
 
 <template>
-  <section
-    class="walkie-widget relative flex h-full min-h-0 w-full flex-col overflow-y-auto bg-card text-card-foreground select-none"
-    aria-label="Walkie-talkie"
-  >
-    <!-- Header -->
-    <header class="flex shrink-0 items-center justify-between gap-2 border-b border-border/70 px-3 py-2">
-      <div class="flex min-w-0 items-center gap-2">
-        <div class="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-          <Radio class="h-3.5 w-3.5" />
-          <span
-            v-if="active"
-            class="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-card"
-          />
-          <span
-            v-else-if="connecting"
-            class="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-amber-400 ring-2 ring-card animate-pulse"
-          />
-        </div>
-        <div class="min-w-0">
-          <p class="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Walkie-talkie</p>
-          <h2 class="truncate text-xs font-semibold tracking-tight">{{ state.groupName }}</h2>
-        </div>
+  <section class="caller-widget-root relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-card text-card-foreground" aria-label="Caller">
+    <header class="flex shrink-0 items-center justify-between gap-2 border-b border-border/70 px-4 py-2">
+      <div class="flex min-w-0 items-center gap-2.5">
+        <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary"><Phone class="h-4 w-4" /></span>
+        <div class="min-w-0"><p class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Caller</p><h2 class="truncate text-sm font-semibold">{{ currentGroup?.name || 'Group calls' }}</h2></div>
       </div>
-
-      <div class="flex items-center gap-1 shrink-0">
-        <!-- Audio pause button -->
-        <button
-          v-if="active || connecting"
-          type="button"
-          class="flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground active:scale-95"
-          aria-label="Pause walkie-talkie audio"
-          title="Pause audio"
-          @click="pause()"
-        >
-          <Pause class="h-3.5 w-3.5" />
-        </button>
-
-        <!-- Pairing code modal trigger -->
-        <button
-          type="button"
-          class="flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground active:scale-95"
-          aria-label="Device pairing code"
-          title="Add this device to a group"
-          @click="codeSheetOpen = true"
-        >
-          <KeyRound class="h-3.5 w-3.5" />
-        </button>
-      </div>
+      <button type="button" class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-border transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Add this device to a group" @click="codeSheetOpen = true"><KeyRound class="h-4 w-4" /></button>
     </header>
 
-    <!-- Group switcher tabs (if joined multiple groups) -->
-    <nav
-      v-if="groups.length > 1"
-      class="flex shrink-0 gap-1.5 border-b border-border/50 px-3 py-2 overflow-x-auto no-scrollbar bg-muted/20"
-      aria-label="Joined groups"
-    >
-      <button
-        v-for="group in groups"
-        :key="group.id"
-        type="button"
-        :disabled="switching || group.id === groupId"
-        class="inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-60"
-        :class="group.id === groupId
-          ? 'bg-primary text-primary-foreground shadow-sm'
-          : 'border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground'"
-        @click="switchGroup(group.id)"
-      >
-        <span>{{ group.name }}</span>
-        <span
-          v-if="group.id === groupId"
-          class="inline-block h-1.5 w-1.5 rounded-full bg-primary-foreground/80"
-        />
-      </button>
-    </nav>
+    <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3" @touchmove.stop @wheel.stop>
+      <div class="mx-auto flex min-h-full w-full max-w-md flex-col gap-3 pb-3">
+        <p v-if="busyElsewhere" role="status" class="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs">This device is already on a call in another tab.</p>
+        <div v-if="activityError || state.status === 'error'" role="alert" class="rounded-2xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">{{ activityError || state.message }}</div>
+        <button v-if="previousCall" type="button" class="min-h-11 rounded-full border border-primary px-4 text-xs font-semibold text-primary disabled:opacity-50" :disabled="switching || busyElsewhere" @click="rejoinPrevious">Rejoin previous call</button>
 
-    <!-- Notification / Other activity banner -->
-    <div v-if="otherActivity.length || activityError" class="shrink-0 px-3 pt-2">
-      <WalkieActivityToast
-        :activity="otherActivity"
-        :switching="switching"
-        @switch="switchGroup"
-      />
-      <div
-        v-if="activityError"
-        role="alert"
-        class="mt-1 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-      >
-        <AlertCircle class="h-3.5 w-3.5 shrink-0" />
-        <span class="truncate">{{ activityError }}</span>
-      </div>
-    </div>
-
-    <!-- Main content (smooth scrollable compact layout) -->
-    <div class="flex flex-1 min-h-0 flex-col items-center justify-between px-3 py-2 overflow-y-auto">
-      <!-- Top section: Members & Speaker status -->
-      <div class="flex flex-col items-center gap-1 w-full shrink-0">
-        <template v-if="groupId">
-          <!-- Member Avatar Cluster -->
-          <WalkieAvatarCluster
-            :members="state.members"
-            :speaker-id="state.speaker?.device_id"
-          />
-
-          <!-- Live Speaker / State Subtitle -->
-          <div class="h-4 flex items-center justify-center text-center">
-            <span
-              v-if="currentSpeaker"
-              class="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-500 animate-pulse"
-            >
-              <span class="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-              {{ currentSpeaker.first_name || currentSpeaker.name }} is speaking
-            </span>
-            <span
-              v-else-if="state.members.length"
-              class="text-[11px] text-muted-foreground"
-            >
-              {{ state.members.filter(m => m.online).length }} of {{ state.members.length }} devices online
-            </span>
-            <span v-else class="text-[11px] text-muted-foreground">
-              No members yet
-            </span>
+        <template v-if="inLiveCall">
+          <button v-if="pendingCalls.length" type="button" class="min-h-11 rounded-full border border-primary/30 bg-primary/10 px-4 text-xs font-semibold text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="waitingModalOpen = true">Incoming {{ pendingCalls.length === 1 ? 'call' : 'calls' }} ({{ pendingCalls.length }}) · View</button>
+          <div class="caller-live-layout flex flex-1 flex-col">
+          <div class="caller-live-people flex flex-1 flex-col items-center justify-center gap-3 py-2 text-center" role="status" aria-live="polite">
+            <div><p class="text-xs font-semibold uppercase tracking-wider text-primary">{{ callStatus }}</p><h3 class="mt-1 break-words text-xl font-semibold">{{ currentGroup?.name || state.groupName }}</h3></div>
+            <div v-if="participants.length" class="flex flex-wrap justify-center gap-x-4 gap-y-3 py-2" aria-label="Call participants">
+              <div v-for="person in participants" :key="person.connection_id" class="flex w-16 flex-col items-center gap-1.5">
+                <WalkieParticipantAvatar :name="person.first_name || person.name || person.device_name" :picture-url="person.picture_url" size-class="h-14 w-14 text-lg" class="ring-4 ring-primary/10" />
+                <span class="w-full truncate text-xs font-medium">{{ person.first_name || person.name || person.device_name }}</span>
+              </div>
+            </div>
+            <div v-else class="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10 text-primary"><Users class="h-7 w-7" /></div>
+            <p class="text-xs text-muted-foreground">{{ !currentCall?.established ? 'Waiting for someone to pick up' : state.muted ? 'Your microphone is muted' : 'Your microphone is on' }}</p>
+          </div>
+          <div class="caller-live-actions flex shrink-0 flex-col items-center justify-center">
+          <div class="flex shrink-0 justify-center gap-6 pb-1">
+            <div class="flex flex-col items-center gap-1.5">
+              <button type="button" class="flex h-14 w-14 items-center justify-center rounded-full border border-border bg-muted transition hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" :aria-pressed="state.muted" :aria-label="state.muted ? 'Unmute microphone' : 'Mute microphone'" @click="toggleMute"><MicOff v-if="state.muted" class="h-5 w-5" /><Mic v-else class="h-5 w-5" /></button>
+              <span class="text-xs font-medium">{{ state.muted ? 'Unmute' : 'Mute' }}</span>
+            </div>
+            <div class="flex flex-col items-center gap-1.5">
+              <button type="button" :disabled="switching" aria-label="Leave call" class="flex h-14 w-14 items-center justify-center rounded-full bg-rose-600 text-white transition hover:bg-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50" @click="leave()"><PhoneOff class="h-5 w-5" /></button>
+              <span class="text-xs font-medium">Leave</span>
+            </div>
+          </div>
+          <button v-if="canEndForEveryone" type="button" :disabled="switching" class="min-h-11 self-center rounded-full px-4 text-xs font-semibold text-rose-500 hover:bg-rose-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50" @click="confirmEndOpen = true">End for everyone</button>
+          </div>
           </div>
         </template>
-
-        <!-- No group state -->
         <template v-else>
-          <div class="rounded-xl border border-dashed border-border bg-muted/15 p-3 text-center max-w-xs mt-1">
-            <p class="text-xs font-semibold text-foreground">No group assigned</p>
-            <p class="mt-0.5 text-[11px] text-muted-foreground leading-snug">
-              Share your device code with a group owner to join a walkie group.
-            </p>
-            <button
-              type="button"
-              class="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition shadow-sm active:scale-95"
-              @click="codeSheetOpen = true"
-            >
-              <KeyRound class="h-3.5 w-3.5" />
-              <span>Get device code</span>
-            </button>
-          </div>
+          <p v-if="switching" class="text-center text-xs text-muted-foreground" role="status">Connecting call…</p>
+          <CallerInvitations v-if="ringingCalls.length" :calls="ringingCalls" featured />
+          <template v-else>
+            <nav v-if="groups.length > 1" class="flex shrink-0 gap-2 overflow-x-auto pb-1" aria-label="Caller groups" @touchstart.stop @touchend.stop @wheel.stop>
+              <button v-for="group in groups" :key="group.id" type="button" :disabled="switching || busyElsewhere" :aria-pressed="group.id === currentGroupId" class="min-h-11 shrink-0 rounded-full px-4 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60" :class="group.id === currentGroupId ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'" @click="switchGroup(group.id)">{{ group.name }}</button>
+            </nav>
+            <div v-if="currentGroup" class="caller-idle-group flex flex-1 flex-col items-center justify-center gap-3 py-3 text-center">
+              <p class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Your group</p>
+              <h3 class="break-words text-xl font-semibold">{{ currentGroup.name }}</h3>
+              <WalkieAvatarCluster :members="currentGroup.members" />
+              <p class="text-xs text-muted-foreground">{{ currentGroup.members.filter(member => member.online).length }} of {{ currentGroup.members.length }} devices online</p>
+              <button v-if="!currentCall" type="button" :disabled="switching || busyElsewhere" class="mt-2 flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-emerald-600 px-4 text-sm font-semibold text-white hover:bg-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50" @click="currentGroupId && connect(currentGroupId)"><Phone class="h-4 w-4" />Call group</button>
+            </div>
+            <div v-else-if="!groups.length" class="flex flex-1 flex-col items-center justify-center gap-2 py-4 text-center">
+              <span class="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10 text-primary"><Users class="h-7 w-7" /></span>
+              <p class="text-base font-semibold">Join a group to call</p><p class="text-xs text-muted-foreground">Share your device code with a group owner.</p>
+              <button type="button" class="mt-2 min-h-11 rounded-full bg-primary px-5 text-xs font-semibold text-primary-foreground" @click="codeSheetOpen = true">Get device code</button>
+            </div>
+          </template>
+          <div v-if="ongoingCalls.length" class="space-y-2"><p class="text-xs font-semibold text-muted-foreground">Calls in progress</p><CallerInvitations :calls="ongoingCalls" /></div>
         </template>
-      </div>
-
-      <!-- Center: Call Actions (PTT + Live Call) -->
-      <div class="my-auto py-1 flex flex-col items-center shrink-0">
-        <div class="flex items-center justify-center gap-3 sm:gap-4">
-          <WalkiePTTButton
-            :status="state.status"
-            :active="active"
-            @press="press"
-            @release="release"
-          />
-
-          <!-- Live Call Toggle Button -->
-          <button
-            type="button"
-            class="walkie-live-call-btn flex h-14 w-14 sm:h-16 sm:w-16 flex-col items-center justify-center gap-0.5 rounded-full border-2 shadow-md transition-all active:scale-95 disabled:opacity-50"
-            :class="inLiveCall
-              ? 'border-rose-400 bg-rose-600 text-white shadow-rose-600/30 animate-pulse'
-              : 'border-emerald-500/40 bg-emerald-600/10 text-emerald-500 hover:bg-emerald-600/20 shadow-emerald-500/10'"
-            :disabled="!groupId || switching"
-            :aria-label="inLiveCall ? 'End live call' : callState === 'ringing' ? 'Join live call' : 'Start live call'"
-            :title="inLiveCall ? 'End live call' : callState === 'ringing' ? 'Join live call' : 'Start hands-free live call'"
-            @click="toggleLiveCall"
-          >
-            <PhoneOff v-if="inLiveCall" class="h-5 w-5 sm:h-6 sm:w-6" />
-            <PhoneCall v-else class="h-5 w-5 sm:h-6 sm:w-6" />
-            <span class="text-[9px] font-semibold">{{ liveButtonLabel }}</span>
-          </button>
-        </div>
-
-        <!-- Status message line -->
-        <p class="mt-1 max-w-60 text-center text-[11px] text-muted-foreground" role="status" aria-live="polite">
-          {{ inLiveCall ? 'In live call · Tap End to hang up' : state.message }}
-        </p>
-
-        <!-- Enable Audio Action -->
-        <button
-          v-if="!active && !connecting && groupId"
-          type="button"
-          class="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-1.5 text-xs font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90 active:scale-95"
-          @click="enable()"
-        >
-          <Volume2 class="h-3.5 w-3.5" />
-          <span>Enable audio</span>
-        </button>
-
-        <!-- Blocked Playback Action -->
-        <button
-          v-if="state.playbackBlocked"
-          type="button"
-          class="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-primary bg-primary/20 px-3.5 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary/30 active:scale-95 animate-pulse"
-          @click="resumePlayback"
-        >
-          <Volume2 class="h-3.5 w-3.5" />
-          <span>Incoming audio · Tap to unmute</span>
-        </button>
+        <button v-if="state.playbackBlocked || ringBlocked" type="button" class="flex min-h-11 items-center justify-center gap-2 rounded-full border border-primary/30 px-4 text-xs font-semibold text-primary" @click="enableSound"><Volume2 class="h-4 w-4" />{{ state.playbackBlocked ? 'Enable call audio' : 'Enable ringtone' }}</button>
+        <p class="caller-footnote mt-auto text-center text-[10px] text-muted-foreground">{{ inLiveCall ? 'You can browse other widgets during your call.' : 'Keep this dashboard open to receive calls.' }}</p>
       </div>
     </div>
-
-    <!-- Device code bottom sheet -->
-    <WalkieDeviceCodePanel
-      :open="codeSheetOpen"
-      :unassigned="!groupId"
-      @close="codeSheetOpen = false"
-    />
+    <WalkieDeviceCodePanel :open="codeSheetOpen" :unassigned="!groups.length" @close="codeSheetOpen = false" />
+    <DialogRoot v-if="inLiveCall" v-model:open="confirmEndOpen">
+      <DialogPortal to=".caller-widget-root">
+        <DialogOverlay class="absolute inset-0 z-50 bg-black/60" />
+        <DialogContent class="absolute left-1/2 top-1/2 z-50 w-[calc(100%_-_2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-3xl border border-border bg-card p-5 text-card-foreground shadow-xl focus:outline-none">
+          <DialogTitle class="text-base font-semibold">End call for everyone?</DialogTitle>
+          <DialogDescription class="mt-2 text-sm text-muted-foreground">Everyone will be disconnected from this group call.</DialogDescription>
+          <div class="mt-5 flex gap-2"><DialogClose class="min-h-11 flex-1 rounded-full border border-border px-4 text-sm font-medium">Cancel</DialogClose><button type="button" class="min-h-11 flex-1 rounded-full bg-rose-600 px-4 text-sm font-semibold text-white" @click="endForEveryone">End call</button></div>
+        </DialogContent>
+      </DialogPortal>
+    </DialogRoot>
   </section>
 </template>
 
 <style scoped>
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
-}
-.no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
+@media screen and (max-height: 500px), screen and (orientation: portrait) and (max-width: 500px) {
+  .caller-live-layout { flex-direction: row; align-items: center; gap: 0.5rem; }
+  .caller-live-people { min-width: 0; gap: 0.25rem; }
+  .caller-live-actions { width: 9.5rem; }
+  .caller-idle-group { gap: 0.25rem; padding: 0; }
+  .caller-idle-group button { margin-top: 0.25rem; }
+  .caller-footnote { display: none; }
 }
 </style>

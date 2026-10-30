@@ -1,5 +1,5 @@
 import { apiClient } from "./client";
-import type { WalkieDeviceCodeResponse, WalkieGroupSummary } from "../types/walkieTalkie";
+import type { WalkieCall, WalkieDeviceCodeResponse, WalkieGroupSummary } from "../types/walkieTalkie";
 import { getStoredDeviceToken } from "../services/deviceStorage";
 
 export class WalkieTalkieApi {
@@ -32,6 +32,10 @@ export class WalkieTalkieApi {
     return this.request<{ groups: WalkieGroupSummary[]; device_id: string }>("memberships", {}, signal);
   }
 
+  callState(groupId: string, signal?: AbortSignal) {
+    return this.request<{ call: WalkieCall | null }>("call-state", { group_id: groupId }, signal);
+  }
+
   activate(groupId: string) {
     return this.request<{ ok: boolean; cleanup_pending: boolean }>("active", { group_id: groupId });
   }
@@ -44,7 +48,7 @@ export class WalkieTalkieApi {
     return this.request<{ group_name: string }>("availability", {}, signal);
   }
 
-  media<T>(connectionId: string, operation: string, body: Record<string, unknown> = {}, signal?: AbortSignal) {
-    return this.request<T>("media", { connection_id: connectionId, operation, ...body }, signal);
+  media<T>(groupId: string, connectionId: string, operation: string, body: Record<string, unknown> = {}, signal?: AbortSignal) {
+    return this.request<T>("media", { group_id: groupId, protocol_version: 2, connection_id: connectionId, operation, ...body }, signal);
   }
 }

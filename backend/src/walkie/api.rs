@@ -92,6 +92,22 @@ async fn dispatch(mut req: Request, ctx: RouteContext<()>) -> AppResult<Response
         let alerted = super::repository::wake_group_devices(&ctx.env, &db, group_id, Some(&token)).await?;
         return Response::from_json(&json!({"ok": true, "alerted": alerted})).map_err(db_error);
     }
+    if path.ends_with("/call-state") {
+        let body: Value = req.json().await.map_err(|_| AppError::bad_request("Invalid JSON body."))?;
+        let group_id = body.get("group_id").and_then(Value::as_str).unwrap_or("");
+        repo.device_member(group_id, &token).await?;
+        return super::room_call(&ctx.env, group_id, "/call-state", &json!({"token":token,"group_id":group_id,"observe":true})).await;
+    }
+    if path.ends_with("/media") {
+        let body: Value = req.json().await.map_err(|_| AppError::bad_request("Invalid JSON body."))?;
+        if body.get("protocol_version").and_then(Value::as_u64) != Some(2) {
+            return Err(AppError::new("Refresh this page to use Caller.", 409));
+        }
+        let group_id = body.get("group_id").and_then(Value::as_str).unwrap_or("");
+        let (group, uid) = repo.device_member(group_id, &token).await?;
+        return super::room_call(&ctx.env, &group.id, "/media",
+            &json!({"token":token,"user_id":uid,"group_id":group.id,"body":body})).await;
+    }
     if path.ends_with("/connect") || path.ends_with("/media") || path.ends_with("/availability") {
         let (assigned, uid) = repo.device_group(&token).await?;
         if path.ends_with("/availability") {
@@ -99,7 +115,7 @@ async fn dispatch(mut req: Request, ctx: RouteContext<()>) -> AppResult<Response
                 || ctx.env.secret("WALKIE_SFU_APP_SECRET").is_err()
             {
                 return Err(AppError::service_unavailable(
-                    "Walkie-talkie audio is not configured. Set the backend SFU app ID and secret.",
+                    "Caller audio is not configured. Set the backend SFU app ID and secret.",
                 ));
             }
             return Response::from_json(&json!({"group_name":assigned.name})).map_err(db_error);
