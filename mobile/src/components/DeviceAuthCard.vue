@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useDeviceAuth } from "../composables/useDeviceAuth";
+import { useWalkieTalkie } from "../composables/useWalkieTalkie";
+import CallerWaitingModal from "./widgets/CallerWaitingModal.vue";
 import { useWidgets } from "../composables/useWidgets";
 import { asStockConfig } from "../types/widget";
 import DevicePairingView from "./DevicePairingView.vue";
@@ -37,7 +39,7 @@ const stockConfig = computed(() => {
 const rightPanelItems = computed<PagerItem[]>(() => {
   const items: PagerItem[] = [];
   if (walkieWidget.value) {
-    items.push({ key: "walkie", label: "Walkie-talkie" });
+    items.push({ key: "walkie", label: "Caller" });
   }
   if (stockConfig.value) {
     items.push({ key: "stock", label: "Stocks" });
@@ -46,6 +48,10 @@ const rightPanelItems = computed<PagerItem[]>(() => {
 });
 
 const selectedPanel = ref("walkie");
+const callerEnabled = computed(() => Boolean(isAuthenticated.value && walkieWidget.value));
+const configuredGroup = computed(() => typeof walkieWidget.value?.config.group_id === "string" ? walkieWidget.value.config.group_id : null);
+const caller = useWalkieTalkie(configuredGroup, callerEnabled);
+watch(caller.incomingSequence, () => { isStockInspected.value = false; selectedPanel.value = "walkie"; });
 watch(
   rightPanelItems,
   (items) => {
@@ -108,7 +114,7 @@ function handleStockViewMode(mode: "grid" | "detail"): void {
         v-else
         class="relative flex h-full w-full flex-col items-center justify-center p-4 text-center"
       >
-        <span class="text-xs text-muted-foreground">No stock or walkie-talkie configured.</span>
+        <span class="text-xs text-muted-foreground">No stock or Caller configured.</span>
       </div>
     </template>
 
@@ -121,5 +127,6 @@ function handleStockViewMode(mode: "grid" | "detail"): void {
       :expires-at="expiresAt"
       @refresh="createSession"
     />
+    <CallerWaitingModal v-if="callerEnabled" />
   </div>
 </template>

@@ -28,12 +28,12 @@ async function handleCopy(): Promise<void> {
   <transition name="sheet-backdrop">
     <div
       v-if="open"
-      class="fixed inset-0 z-40 bg-black/60 backdrop-blur-xs sm:absolute sm:z-20 sm:bg-black/50 sm:backdrop-blur-[2px] flex flex-col justify-end"
+      class="absolute inset-0 z-40 flex flex-col justify-end bg-black/60 backdrop-blur-xs"
       @click.self="emit('close')"
     >
       <transition name="sheet-content" appear>
         <div
-          class="relative z-10 mx-auto w-full max-w-lg rounded-t-2xl border-t border-border bg-card p-3.5 sm:p-5 pb-5 sm:pb-8 flex flex-col gap-2.5 sm:gap-4 text-card-foreground max-h-[92dvh] overflow-y-auto shadow-2xl"
+          class="relative z-10 mx-auto flex max-h-full w-full max-w-lg flex-col gap-2.5 overflow-y-auto rounded-t-2xl border-t border-border bg-card p-3.5 pb-5 text-card-foreground shadow-2xl sm:gap-4 sm:p-5"
           role="dialog"
           aria-modal="true"
           aria-labelledby="device-code-title"
@@ -44,7 +44,7 @@ async function handleCopy(): Promise<void> {
           <!-- Header -->
           <div class="flex items-center justify-between gap-2 border-b border-border/60 pb-2.5 sm:pb-3">
             <div class="flex items-center gap-2.5">
-              <div class="flex h-7 w-7 sm:h-8 sm:w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <div class="flex h-7 w-7 sm:h-8 sm:w-8 items-center justify-center rounded-full bg-primary/10 text-primary">
                 <KeyRound class="h-3.5 w-3.5 sm:h-4 sm:w-4" />
               </div>
               <div>
@@ -54,7 +54,7 @@ async function handleCopy(): Promise<void> {
             </div>
             <button
               type="button"
-              class="rounded-full p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              class="flex h-11 w-11 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               aria-label="Close"
               @click="emit('close')"
             >
@@ -79,7 +79,7 @@ async function handleCopy(): Promise<void> {
             <KeyRound class="mx-auto h-7 w-7 sm:h-8 sm:w-8 text-muted-foreground/50 mb-1.5 sm:mb-2" />
             <p class="text-xs font-medium text-foreground">No active code</p>
             <p class="mt-1 text-[10px] sm:text-[11px] text-muted-foreground leading-relaxed">
-              Generate a 10-minute code to let a group owner admit this device to their walkie-talkie group.
+              Generate a 10-minute code to let a group owner admit this device to their Caller group.
             </p>
           </div>
 
@@ -97,7 +97,7 @@ async function handleCopy(): Promise<void> {
               <button
                 type="button"
                 :disabled="busy"
-                class="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-3 sm:px-4 py-2 sm:py-2.5 text-xs font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 disabled:opacity-50 transition active:scale-95"
+                class="flex-1 inline-flex min-h-11 items-center justify-center gap-2 rounded-full bg-primary px-3 sm:px-4 py-2 sm:py-2.5 text-xs font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 disabled:opacity-50 transition active:scale-95"
                 @click="generate"
               >
                 <RotateCcw v-if="activeCode" class="h-3.5 w-3.5" />
@@ -108,7 +108,7 @@ async function handleCopy(): Promise<void> {
                 v-if="activeCode"
                 type="button"
                 :disabled="busy"
-                class="inline-flex items-center justify-center gap-1.5 rounded-xl border border-border bg-card px-3 sm:px-4 py-2 sm:py-2.5 text-xs font-medium hover:bg-muted disabled:opacity-50 transition active:scale-95"
+                class="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-full border border-border bg-card px-3 sm:px-4 py-2 sm:py-2.5 text-xs font-medium hover:bg-muted disabled:opacity-50 transition active:scale-95"
                 @click="handleCopy"
               >
                 <Check v-if="copied" class="h-3.5 w-3.5 text-emerald-500" />
@@ -121,7 +121,7 @@ async function handleCopy(): Promise<void> {
               v-if="activeCode"
               type="button"
               :disabled="busy"
-              class="rounded-xl py-1.5 sm:py-2 text-center text-xs text-muted-foreground hover:text-destructive disabled:opacity-50 transition"
+              class="rounded-full py-1.5 sm:py-2 text-center text-xs text-muted-foreground hover:text-destructive disabled:opacity-50 transition"
               @click="cancel"
             >
               Cancel active code

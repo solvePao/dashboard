@@ -19,6 +19,8 @@ interface WalkieSub { groupId: string; observe: boolean }
  * One heartbeat keeps every walkie subscription alive server-side.
  */
 class LiveSocketClient {
+  gatewaySocketId = "";
+  callerOwner: { busy: boolean; owner_id: string | null; group_id: string | null } = { busy: false, owner_id: null, group_id: null };
   private ws: WebSocket | null = null;
   private url = "";
   private wanted = false;
@@ -67,7 +69,7 @@ class LiveSocketClient {
       this.heartbeat = setInterval(() => this.sendRaw({ channel: "system", type: "heartbeat" }), 10_000);
       // Re-establish walkie subscriptions and pairing replay on the new socket.
       for (const sub of this.walkieSubs.values()) {
-        this.sendRaw({ channel: "walkie", type: "subscribe", group_id: sub.groupId, observe: sub.observe });
+        this.sendRaw({ channel: "walkie", type: "subscribe", group_id: sub.groupId, observe: sub.observe, protocol_version: 2 });
       }
       if (this.url.includes("/live/pairing/")) this.sendRaw({ channel: "pairing", type: "status" });
       const waiters = this.openWaiters;
@@ -78,6 +80,8 @@ class LiveSocketClient {
       let data: LiveEnvelope;
       try { data = JSON.parse(String(event.data)) as LiveEnvelope; } catch { return; }
       if (!data.channel) return;
+      if (data.channel === "system" && data.type === "hello" && typeof data.gateway_socket_id === "string") this.gatewaySocketId = data.gateway_socket_id;
+      if (data.channel === "device" && data.status === "caller_ownership") this.callerOwner = { busy: data.busy === true, owner_id: typeof data.owner_id === "string" ? data.owner_id : null, group_id: typeof data.group_id === "string" ? data.group_id : null };
       for (const entry of [...this.handlers]) {
         if (entry.channel !== data.channel) continue;
         if (entry.groupId && entry.groupId !== data.group_id) continue;
@@ -119,19 +123,19 @@ class LiveSocketClient {
     this.walkieSubs.set(key, { groupId, observe });
     const unsubscribe = this.subscribe("walkie", handler, groupId);
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.sendRaw({ channel: "walkie", type: "subscribe", group_id: groupId, observe });
+      this.sendRaw({ channel: "walkie", type: "subscribe", group_id: groupId, observe, protocol_version: 2 });
     }
     return () => {
       unsubscribe();
       if (this.walkieSubs.delete(key) && this.ws?.readyState === WebSocket.OPEN) {
-        this.sendRaw({ channel: "walkie", type: "unsubscribe", group_id: groupId, observe });
+        this.sendRaw({ channel: "walkie", type: "unsubscribe", group_id: groupId, observe, protocol_version: 2 });
       }
     };
   }
 
   /** Signalling from a media session: always targets the observe=false subscription. */
   sendWalkie(groupId: string, message: Record<string, unknown>): void {
-    this.sendRaw({ channel: "walkie", group_id: groupId, observe: false, ...message });
+    this.sendRaw({ channel: "walkie", group_id: groupId, observe: false, protocol_version: 2, ...message });
   }
 
   sendRaw(value: Record<string, unknown>): void {

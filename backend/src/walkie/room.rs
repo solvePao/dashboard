@@ -9,7 +9,6 @@ use std::time::Duration;
 struct Room {
     group_id: String,
     clients: BTreeMap<String, Client>,
-    speaker: Option<Speaker>,
     cleanup: Vec<MediaSession>,
     #[serde(default)]
     cleanup_in_flight: Option<MediaSession>,
@@ -20,7 +19,7 @@ struct Room {
     #[serde(default)]
     call: Option<Call>,
     #[serde(default)]
-    pending_ring: Option<PendingRing>,
+    caller_version: u8,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Call {
@@ -28,15 +27,11 @@ struct Call {
     started_by: String,
     participants: Vec<String>,
     started_at: u64,
-    /// 0 once established (2+ participants); otherwise ring deadline.
-    #[serde(default)]
     ringing_until: u64,
-}
-#[derive(Clone, Serialize, Deserialize)]
-struct PendingRing {
-    connection_id: String,
-    request_id: Option<Value>,
-    expires_at: u64,
+    #[serde(default)]
+    established: bool,
+    #[serde(default)]
+    declined: Vec<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Client {
@@ -68,13 +63,6 @@ struct MediaSession {
     attempts: u8,
 }
 #[derive(Clone, Serialize, Deserialize)]
-struct Speaker {
-    connection_id: String,
-    user_id: i64,
-    lease_id: String,
-    expires_at: u64,
-}
-#[derive(Clone, Serialize, Deserialize)]
 struct Ticket {
     #[serde(default)]
     observe: bool,
@@ -96,31 +84,30 @@ pub struct WalkieGroupObject {
 
 impl WalkieGroupObject {
     async fn load(&self) -> Result<Room> {
-        Ok(self.state.storage().get("room").await?.unwrap_or_default())
+        let mut room: Room = self.state.storage().get("room").await?.unwrap_or_default();
+        if room.caller_version != 2 {
+            // Legacy connections could auto-join. Tear down their transient media,
+            // while preserving cleanup and all externally stored group settings.
+            for client in std::mem::take(&mut room.clients).into_values() {
+                room.cleanup.extend(client.sessions);
+            }
+            room.call = None;
+            room.tickets.clear();
+            room.caller_version = 2;
+        }
+        Ok(room)
     }
 
     async fn save(&self, room: &Room) -> Result<()> {
         self.state.storage().put("room", room).await?;
-        if !room.clients.is_empty()
-            || !room.cleanup.is_empty()
-            || room.cleanup_in_flight.is_some()
-            || !room.tickets.is_empty()
+        if !room.clients.is_empty() || !room.cleanup.is_empty()
+            || room.cleanup_in_flight.is_some() || !room.tickets.is_empty() || room.call.is_some()
         {
-            let delay = room
-                .speaker
-                .as_ref()
-                .map(|s| s.expires_at.saturating_sub(now()).max(1))
-                .unwrap_or(
-                    if room.cleanup.is_empty() || room.cleanup_in_flight.is_some() {
-                        15_000
-                    } else {
-                        1000
-                    },
-                );
-            self.state
-                .storage()
-                .set_alarm(Duration::from_millis(delay.min(15_000)))
-                .await?;
+            let cleanup_delay = if room.cleanup.is_empty() || room.cleanup_in_flight.is_some() { 15_000 } else { 1000 };
+            let delay = room.call.as_ref().filter(|c| !c.established)
+                .map(|c| c.ringing_until.saturating_sub(now()).max(1).min(cleanup_delay))
+                .unwrap_or(cleanup_delay);
+            self.state.storage().set_alarm(Duration::from_millis(delay)).await?;
         } else {
             let _ = self.state.storage().delete_alarm().await;
         }
@@ -147,7 +134,7 @@ impl WalkieGroupObject {
 
     fn call_json(room: &Room) -> Value {
         match &room.call {
-            Some(c) => json!({"call_id": c.call_id, "started_by": c.started_by, "participants": c.participants, "started_at": c.started_at, "ringing_until": c.ringing_until, "established": c.participants.len() >= 2}),
+            Some(c) => json!({"call_id": c.call_id, "started_by": c.started_by, "participants": c.participants, "started_at": c.started_at, "ringing_until": c.ringing_until, "established": c.established, "declined": c.declined}),
             None => Value::Null,
         }
     }
@@ -176,7 +163,6 @@ impl WalkieGroupObject {
         };
         let value = json!({"type":"snapshot","group_name":name,"members":members,
             "clients":room.clients.iter().filter(|(_,c)|!c.observe).map(|(id,c)| json!({"connection_id":id,"device_id":c.device_id,"user_id":c.user_id,"name":c.first_name,"first_name":c.first_name,"picture_url":c.picture_url,"device_name":c.device_name,"published":c.published})).collect::<Vec<_>>(),
-            "speaker":room.speaker.as_ref().map(|s| json!({"connection_id":s.connection_id,"device_id":room.clients.get(&s.connection_id).map(|c|&c.device_id),"user_id":s.user_id,"expires_at":s.expires_at})),
             "call": Self::call_json(room)});
         // One delivery per distinct device gateway (mux socket), not per socket.
         let mut tokens: Vec<String> = Vec::new();
@@ -204,21 +190,9 @@ impl WalkieGroupObject {
             }
             c.sessions = kept;
         }
-        if room.speaker.as_ref().is_some_and(|s| s.connection_id == id) {
-            room.speaker = None;
-        }
-        if room.pending_ring.as_ref().is_some_and(|p| p.connection_id == id) {
-            room.pending_ring = None;
-        }
-        {
-            let clear = match &mut room.call {
-                Some(call) => { call.participants.retain(|p| p != id); call.participants.len() < 2 }
-                None => false,
-            };
-            if clear { room.call = None; }
-        }
+        Self::leave_participant(room, id);
         if let Some(token) = target_token {
-            crate::objects::gateway::deliver_to_gateway(&self.env, &crate::common::gateway_device_name(&token), "walkie", Some(&room.group_id), &json!({"type":"ended","reason":reason})).await;
+            crate::objects::gateway::deliver_to_gateway(&self.env, &crate::common::gateway_device_name(&token), "walkie", Some(&room.group_id), &json!({"type":"ended","connection_id":id,"reason":reason})).await;
         }
     }
 
@@ -234,15 +208,7 @@ impl WalkieGroupObject {
             }
             c.sessions = kept;
         }
-        if room.speaker.as_ref().is_some_and(|s| s.connection_id == id) { room.speaker = None; }
-        if room.pending_ring.as_ref().is_some_and(|p| p.connection_id == id) { room.pending_ring = None; }
-        {
-            let clear = match &mut room.call {
-                Some(call) => { call.participants.retain(|p| p != id); call.participants.len() < 2 }
-                None => false,
-            };
-            if clear { room.call = None; }
-        }
+        Self::leave_participant(room, id);
     }
 
     async fn prune_state(&self, room: &mut Room) -> Result<()> {
@@ -253,11 +219,10 @@ impl WalkieGroupObject {
         struct Authorized {
             token: String,
             user_id: i64,
-            active: i64,
         }
         // Validate the room in one database read rather than one round trip per check per socket.
         let authorized = repo.rows::<Authorized>(
-            "SELECT t.token,t.user_id,EXISTS(SELECT 1 FROM walkie_assignments a WHERE a.token=t.token AND a.group_id=m.group_id AND json_extract(w.config_json,'$.group_id')=m.group_id) AS active FROM device_tokens t JOIN walkie_device_members m ON m.token=t.token JOIN device_widgets w ON w.token=t.token AND w.widget_key='walkie_talkie' AND w.enabled=1 WHERE m.group_id=? AND t.expires_at>strftime('%Y-%m-%dT%H:%M:%fZ','now')",
+            "SELECT t.token,t.user_id FROM device_tokens t JOIN walkie_device_members m ON m.token=t.token JOIN device_widgets w ON w.token=t.token AND w.widget_key='walkie_talkie' AND w.enabled=1 WHERE m.group_id=? AND t.expires_at>strftime('%Y-%m-%dT%H:%M:%fZ','now')",
             &[D1Type::Text(&room.group_id)],
         ).await.map_err(|error| Error::RustError(error.message))?;
         let removed: Vec<String> = room
@@ -267,7 +232,6 @@ impl WalkieGroupObject {
                 !authorized.iter().any(|entry| {
                     entry.token == client.token
                         && entry.user_id == client.user_id
-                        && (client.observe || entry.active != 0)
                 }) || client.device_id.is_empty()
                     || client.last_seen + 45_000 < now()
             })
@@ -277,19 +241,12 @@ impl WalkieGroupObject {
             self.remove(
                 room,
                 &id,
-                "Access changed or connection timed out. Enable audio again.",
+                "Access changed or connection timed out. Join again to retry.",
             )
             .await;
         }
-        if room.speaker.as_ref().is_some_and(|s| s.expires_at <= now()) {
-            console_log!("walkie speaking lease expired");
-            room.speaker = None;
-        }
-        if room.pending_ring.as_ref().is_some_and(|p| p.expires_at <= now()) {
-            room.pending_ring = None;
-        }
-        if room.call.as_ref().is_some_and(|c| c.ringing_until != 0 && c.ringing_until <= now() && c.participants.len() < 2) {
-            room.call = None;
+        if room.call.as_ref().is_some_and(|c| !c.established && c.ringing_until <= now()) {
+            Self::end_call(room);
         }
         Ok(())
     }
@@ -304,6 +261,7 @@ impl WalkieGroupObject {
         let mut room = self.load().await?;
         if req.path() == "/presence" {
             self.prune(&mut room).await?;
+            self.broadcast(&room).await?;
             return Response::from_json(
                 &room
                     .clients
@@ -340,13 +298,9 @@ impl WalkieGroupObject {
             .get("observe")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let requested = body.get("group_id").and_then(Value::as_str).unwrap_or("");
+        let requested = body.get("group_id").and_then(Value::as_str).unwrap_or(&room.group_id);
         let repo = WalkieRepository(&db);
-        let access = if observe {
-            repo.device_member(requested, token).await
-        } else {
-            repo.device_group(token).await
-        };
+        let access = repo.device_member(requested, token).await;
         let (group, _uid) = match access {
             Ok(v) => v,
             Err(e) => return e.to_response(),
@@ -355,7 +309,15 @@ impl WalkieGroupObject {
             return Response::error("Invalid group", 403);
         }
         room.group_id = group.id.clone();
+        if req.path() == "/call-state" {
+            self.prune(&mut room).await?;
+            self.broadcast(&room).await?;
+            return Response::from_json(&json!({"call":Self::call_json(&room)}));
+        }
         if req.path() == "/gateway-join" {
+            if body.get("protocol_version").and_then(Value::as_u64) != Some(2) {
+                return Response::error("Refresh this page to use Caller.", 409);
+            }
             return self.gateway_join(&mut room, token, observe, &group).await;
         }
         if req.path() == "/gateway-leave" || req.path() == "/gateway-signal" {
@@ -432,18 +394,15 @@ impl WalkieGroupObject {
 
     /// Gateway-mediated join: the client socket lives on ClientGatewayObject;
     /// this room only registers the media/presence client. Access was already
-    /// validated by `fetch_inner` (`device_group` / `device_member`).
+    /// validated by `fetch_inner` (`device_member`).
     async fn gateway_join(&self, room: &mut Room, token: &str, observe: bool, group: &Group) -> Result<Response> {
         let db = self.env.d1("dashboard")?;
         let repo = WalkieRepository(&db);
         // Resolve the caller's user id from its device profile path.
-        let (_, uid) = if observe { repo.device_member(&group.id, token).await } else { repo.device_group(token).await }
+        let (_, uid) = repo.device_member(&group.id, token).await
             .map_err(|e| Error::RustError(e.message))?;
-        let previous = room.clients.iter()
-            .filter(|(_, c)| c.token == token && c.observe == observe)
-            .map(|(id, _)| id.clone()).collect::<Vec<_>>();
-        for id in previous {
-            self.remove(room, &id, "This device connected in another tab.").await;
+        if !observe && room.clients.values().any(|c| c.token == token && !c.observe) {
+            return Response::error("Caller audio is already active in another tab.", 409);
         }
         let id = random_id().map_err(|e| Error::RustError(e.message))?;
         let device_id = repo.public_id(token).await.map_err(|e| Error::RustError(e.message))?;
@@ -455,115 +414,91 @@ impl WalkieGroupObject {
             picture_url: profile.picture_url, device_name: profile.device_name,
             last_seen: now(), published: false, sessions: Vec::new(),
         });
-        // A waiting PTT caller (ring window) is granted the floor as soon as a peer arrives.
-        if let Some(pending) = room.pending_ring.clone() {
-            if pending.connection_id != id && pending.expires_at > now() && room.speaker.is_none() {
-                if let Some(caller) = room.clients.get(&pending.connection_id) {
-                    let caller_uid = caller.user_id;
-                    let lease = random_id().map_err(|e| Error::RustError(e.message))?;
-                    room.speaker = Some(Speaker { connection_id: pending.connection_id.clone(), user_id: caller_uid, lease_id: lease.clone(), expires_at: now() + 6000 });
-                    room.pending_ring = None;
-                    let granted = json!({"type":"granted","lease_id":lease,"expires_at":now()+6000,"request_id":pending.request_id});
-                    self.save(room).await?;
-                    self.deliver(room, &pending.connection_id, &granted).await;
-                } else { room.pending_ring = None; }
-            } else if pending.expires_at <= now() { room.pending_ring = None; }
-        }
         self.save(room).await?;
         self.broadcast(room).await?;
-        self.save(room).await?;
         Response::from_json(&json!({"connection_id":id,"device_id":device_id,"user_id":uid,"group_id":group.id,"group_name":group.name}))
     }
 
-    /// One signalling message from a gateway client. Caller (`fetch_inner`
-    /// gateway-signal branch, or the legacy socket handler) broadcasts + saves.
+    fn leave_participant(room: &mut Room, id: &str) {
+        let clear = room.call.as_mut().is_some_and(|call| {
+            let was_participant = call.participants.iter().any(|p| p == id);
+            call.participants.retain(|p| p != id);
+            was_participant && (call.participants.is_empty() || (call.established && call.participants.len() < 2))
+        });
+        Self::retire_media(room, &[id.to_string()]);
+        if clear { Self::end_call(room); }
+    }
+
+    fn retire_media(room: &mut Room, connections: &[String]) {
+        for (id, client) in &mut room.clients {
+            let departing = connections.contains(id);
+            if departing { client.published = false; }
+            let mut kept = Vec::new();
+            for session in std::mem::take(&mut client.sessions) {
+                if departing || session.target.as_ref().is_some_and(|target| connections.contains(target)) {
+                    room.cleanup.push(session);
+                } else { kept.push(session); }
+            }
+            client.sessions = kept;
+        }
+    }
+
+    fn end_call(room: &mut Room) {
+        if let Some(call) = room.call.take() { Self::retire_media(room, &call.participants); }
+    }
+
     async fn signal(&self, room: &mut Room, connection_id: &str, data: &Value) -> Result<()> {
         if let Some(client) = room.clients.get_mut(connection_id) { client.last_seen = now(); }
         self.prune(room).await?;
-        let Some(c) = room.clients.get(connection_id) else { return Ok(()) };
-        let uid = c.user_id;
-        let published = c.published;
-        let caller_token = c.token.clone();
-        match data.get("type").and_then(Value::as_str) {
-            Some("press") if published => {
-                if room.call.as_ref().is_some_and(|call| call.participants.iter().any(|p| p == connection_id)) {
-                    // Already live in a call; floor control does not apply.
-                } else if room.speaker.is_none() {
-                    let media_peers = room.clients.values().filter(|c| !c.observe && c.device_id != room.clients.get(connection_id).map(|x| x.device_id.clone()).unwrap_or_default()).count();
-                    if media_peers == 0 {
-                        // Ring window: hold the request server-side, wake the group,
-                        // and grant when a peer joins (see gateway_join).
-                        room.pending_ring = Some(PendingRing { connection_id: connection_id.into(), request_id: data.get("request_id").cloned(), expires_at: now() + 30_000 });
-                        self.save(room).await?;
-                        self.send(room, connection_id, &json!({"type":"calling","request_id":data.get("request_id"),"expires_at":now()+30_000})).await;
-                        if let Ok(db) = self.env.d1("dashboard") {
-                            let _ = super::repository::wake_group_devices(&self.env, &db, &room.group_id, Some(&caller_token)).await;
-                        }
-                    } else {
-                        let lease = random_id().map_err(|e| Error::RustError(e.message))?;
-                        room.speaker = Some(Speaker { connection_id: connection_id.into(), user_id: uid, lease_id: lease.clone(), expires_at: now() + 6000 });
-                        self.save(room).await?;
-                        self.send(room, connection_id, &json!({"type":"granted","lease_id":lease,"expires_at":now()+6000,"request_id":data.get("request_id")})).await;
-                        if let Ok(db) = self.env.d1("dashboard") {
-                            let _ = super::repository::wake_group_devices(&self.env, &db, &room.group_id, Some(&caller_token)).await;
-                        }
-                    }
-                } else {
-                    self.send(room, connection_id, &json!({"type":"busy"})).await;
+        let Some(client) = room.clients.get(connection_id) else { return Ok(()) };
+        let device_id = client.device_id.clone();
+        let published = client.published && !client.observe;
+        let kind = data.get("type").and_then(Value::as_str).unwrap_or("");
+        if kind == "heartbeat" { return Ok(()); }
+        let mut reply = json!({"type":"error", "connection_id":connection_id,
+            "request_id":data.get("request_id"), "message":"This call is no longer available."});
+        if data.get("protocol_version").and_then(Value::as_u64) != Some(2) {
+            reply["code"] = json!("refresh_required");
+            reply["message"] = json!("Refresh this page to use Caller.");
+        } else if kind == "call_start" && published {
+            if room.call.is_none() {
+                let call_id = random_id().map_err(|e| Error::RustError(e.message))?;
+                room.call = Some(Call { call_id: call_id.clone(), started_by: device_id,
+                    participants: vec![connection_id.into()], started_at: now(),
+                    ringing_until: now() + 60_000, established: false, declined: Vec::new() });
+                reply["type"] = json!("call_started");
+                reply["call_id"] = json!(call_id);
+            } else { reply["message"] = json!("This group already has a call. Join it instead."); }
+        } else if let Some(call) = room.call.as_mut().filter(|c|
+            data.get("call_id").and_then(Value::as_str) == Some(c.call_id.as_str())) {
+            let participant = call.participants.iter().any(|p| p == connection_id);
+            let starter = call.started_by == device_id && participant;
+            let accepted = match kind {
+                "call_join" if published => {
+                    if !participant { call.participants.push(connection_id.into()); }
+                    call.declined.retain(|id| id != &device_id);
+                    call.established |= call.participants.len() >= 2;
+                    true
                 }
-            }
-            Some("renew") | Some("release") => {
-                let valid = room.speaker.as_ref().is_some_and(|s| {
-                    s.connection_id == connection_id
-                        && data.get("lease_id").and_then(Value::as_str) == Some(s.lease_id.as_str())
-                });
-                if valid {
-                    if data.get("type").and_then(Value::as_str) == Some("release") {
-                        room.speaker = None;
-                    } else if let Some(s) = &mut room.speaker {
-                        s.expires_at = now() + 6000;
-                        let renewed = json!({"type":"renewed","lease_id":s.lease_id,"expires_at":s.expires_at});
-                        self.send(room, connection_id, &renewed).await;
-                    }
+                "call_decline" if !participant => {
+                    if !call.declined.contains(&device_id) { call.declined.push(device_id); }
+                    true
                 }
-            }
-            Some("call_start") => {
-                if room.call.is_some() {
-                    self.send(room, connection_id, &json!({"type":"call_busy"})).await;
-                } else if published {
-                    let call_id = random_id().map_err(|e| Error::RustError(e.message))?;
-                    room.call = Some(Call { call_id: call_id.clone(), started_by: connection_id.into(), participants: vec![connection_id.into()], started_at: now(), ringing_until: now() + 30_000 });
-                    self.save(room).await?;
-                    self.send(room, connection_id, &json!({"type":"call_ringing","call_id":call_id})).await;
-                    if let Ok(db) = self.env.d1("dashboard") {
-                        let _ = super::repository::wake_group_devices(&self.env, &db, &room.group_id, Some(&caller_token)).await;
-                    }
-                }
-            }
-            Some("call_join") => {
-                let mut joined = false;
-                if let Some(call) = &mut room.call {
-                    if !call.participants.iter().any(|p| p == connection_id) { call.participants.push(connection_id.into()); }
-                    if call.participants.len() >= 2 { call.ringing_until = 0; }
-                    joined = true;
-                }
-                if joined { self.send(room, connection_id, &json!({"type":"call_joined","call_id": room.call.as_ref().map(|c| c.call_id.clone())})).await; }
-            }
-            Some("call_end") => {
-                let ended = room.call.as_ref().map(|call| (call.call_id.clone(), call.participants.clone(), call.participants.iter().any(|p| p == connection_id) || call.started_by == connection_id));
-                if let Some((call_id, participants, allowed)) = ended {
-                    if allowed {
-                        room.call = None;
-                        self.save(room).await?;
-                        for p in participants {
-                            self.deliver(room, &p, &json!({"type":"call_ended","call_id":call_id})).await;
-                        }
-                    }
-                }
-            }
-            Some("heartbeat") => {}
-            _ => {}
+                "call_leave" if participant => true,
+                "call_cancel" if starter && !call.established => true,
+                "call_end" if starter => true,
+                _ => false,
+            };
+            if accepted {
+                reply["type"] = json!("call_ack");
+                reply["call_id"] = json!(call.call_id);
+                if kind == "call_leave" { Self::leave_participant(room, connection_id); }
+                else if kind == "call_end" || kind == "call_cancel" { Self::end_call(room); }
+            } else { reply["message"] = json!("This call action is not permitted."); }
         }
+        // Persist before acknowledgement; snapshots follow in fetch_inner.
+        self.save(room).await?;
+        self.send(room, connection_id, &reply).await;
         Ok(())
     }
 

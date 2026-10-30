@@ -181,6 +181,8 @@ impl WalkieGroupObject {
             } else {
                 None
             };
+            let subscription_target = requested_target.clone();
+            let subscription_call = if requested_target.is_some() { room.call.as_ref().map(|c| c.call_id.clone()) } else { None };
             let local_offer = if op == "publish" {
                 let mid = data
                     .get("mid")
@@ -201,10 +203,14 @@ impl WalkieGroupObject {
             let reservation = random_id()?;
             let reserved = reservation.clone();
             let connection = id.to_string();
-            // Reserve under a short gate; SFU requests must not block heartbeats or leases.
+            // Reserve under a short gate; SFU requests must not block heartbeats.
             let target = self
                 .update_media(id.into(), token.clone(), false, move |room| {
                     let target = if let Some(target) = requested_target {
+                        if !room.call.as_ref().is_some_and(|call|
+                            call.participants.contains(&connection) && call.participants.contains(&target)) {
+                            return Err(AppError::forbidden("Join this call before subscribing to audio."));
+                        }
                         if target == connection {
                             return Err(AppError::bad_request("Cannot subscribe to yourself."));
                         }
@@ -212,7 +218,7 @@ impl WalkieGroupObject {
                             .clients
                             .get(&target)
                             .filter(|c| c.published)
-                            .ok_or_else(|| AppError::not_found("Friend is reconnecting."))?;
+                            .ok_or_else(|| AppError::not_found("Participant audio is unavailable."))?;
                         let session = publisher
                             .sessions
                             .iter()
@@ -270,7 +276,7 @@ impl WalkieGroupObject {
                 .to_string();
             let actual = session.clone();
             let connection = id.to_string();
-            self.update_media(id.into(), token.clone(), false, move |room| {
+            let recorded = self.update_media(id.into(), token.clone(), false, move |room| {
                 let reserved = room
                     .clients
                     .get_mut(&connection)
@@ -283,7 +289,19 @@ impl WalkieGroupObject {
                 reserved.pending = false;
                 Ok(())
             })
-            .await?;
+            .await;
+            if let Err(error) = recorded {
+                // The participant may leave while /sessions/new is in flight.
+                // The returned provider session still needs durable teardown.
+                let coordinator = self.clone();
+                let abandoned = MediaSession { id: session, pending: false, mids: Vec::new(), target: None, attempts: 0 };
+                self.coordinate(async move {
+                    let mut room = coordinator.load().await.map_err(db_error)?;
+                    room.cleanup.push(abandoned);
+                    coordinator.save(&room).await.map_err(db_error)
+                }).await?;
+                return Err(error);
+            }
             let request = if let Some((_, publisher)) = target {
                 json!({"tracks":[{"location":"remote","sessionId":publisher,"trackName":"audio"}]})
             } else if let Some(offer) = local_offer {
@@ -335,6 +353,12 @@ impl WalkieGroupObject {
             let connection = id.to_string();
             let committed = self
                 .update_media(id.into(), token, false, move |room| {
+                    if let Some(target) = subscription_target {
+                        if !room.call.as_ref().is_some_and(|call| Some(&call.call_id) == subscription_call.as_ref()
+                            && call.participants.contains(&connection) && call.participants.contains(&target)) {
+                            return Err(AppError::forbidden("This call has ended."));
+                        }
+                    }
                     let stored = room
                         .clients
                         .get_mut(&connection)

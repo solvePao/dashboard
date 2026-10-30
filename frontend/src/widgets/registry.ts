@@ -29,8 +29,8 @@ export const WIDGET_REGISTRY: readonly WidgetDefinition[] = [
   },
   {
     key: "walkie_talkie",
-    label: "Walkie-talkie",
-    description: "Push-to-talk voice groups for connected devices",
+    label: "Caller",
+    description: "Live group audio calls with explicit pickup",
     icon: Radio,
   },
 ];
