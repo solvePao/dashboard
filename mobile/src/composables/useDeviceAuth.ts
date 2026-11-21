@@ -21,6 +21,9 @@ import type { UserProfile, AuthState } from "../types/auth";
 
 export type { UserProfile, AuthState };
 
+const STARTUP_TIMEOUT_MS = 10_000;
+const savedLoginRetryMessage = "Saved login kept. Tap Check Status.";
+
 const sessionId = ref<string>("");
 const shortCode = ref<string>("");
 const qrSvg = ref<string>("");
@@ -142,7 +145,7 @@ export function useDeviceAuth() {
     });
   }
 
-  async function restoreExistingToken(): Promise<boolean> {
+  async function restoreExistingToken(signal?: AbortSignal): Promise<boolean> {
     try {
       const stored = getStoredDeviceToken();
       if (!stored) return false;
@@ -150,7 +153,8 @@ export function useDeviceAuth() {
       authState.value = "loading";
       statusMessage.value = "Verifying saved device token...";
 
-      const body = await fetchMeApi(stored);
+      const body = await fetchMeApi(stored, signal);
+      signal?.throwIfAborted();
       user.value = body.user;
       authState.value = "authorized";
       statusMessage.value = "Device is connected and authenticated";
@@ -165,14 +169,13 @@ export function useDeviceAuth() {
         const message = err instanceof Error ? err.message : "Network error occurred";
         logger.warn("auth", "Token verification unreachable; keeping saved token", message);
         authState.value = "error";
-        statusMessage.value =
-          "Cannot reach the backend. Your saved login was kept — tap Check for Auth to retry.";
+        statusMessage.value = savedLoginRetryMessage;
       }
       return false;
     }
   }
 
-  async function createSession(): Promise<void> {
+  async function createSession(signal?: AbortSignal): Promise<void> {
     isConfirmingDisconnect.value = false;
     disconnectError.value = "";
     closePairingSocket();
@@ -185,10 +188,8 @@ export function useDeviceAuth() {
       qrSvg.value = "";
       expiresAt.value = "";
 
-      const newSessionId = generateSessionIdHex();
-      sessionId.value = newSessionId;
-
-      const body = await createDeviceSessionApi(newSessionId);
+      const body = await createDeviceSessionApi(generateSessionIdHex(), signal);
+      signal?.throwIfAborted();
 
       sessionId.value = body.session_id;
       shortCode.value = body.short_code || deriveShortCode(body.session_id);
@@ -203,22 +204,32 @@ export function useDeviceAuth() {
       });
     } catch (err) {
       authState.value = "error";
-      const message = err instanceof Error ? err.message : "Failed to initialize pairing session";
+      const message = signal?.aborted
+        ? "Connection timed out. Try again."
+        : err instanceof Error ? err.message : "Failed to initialize pairing session";
       statusMessage.value = message;
       logger.error("auth", "Error creating session", message);
     }
   }
 
   async function init(): Promise<void> {
-    const restored = await restoreExistingToken();
-    if (restored) return;
-    await createSession();
-    if (getStoredDeviceToken()) {
-      // Verification failed without rejecting the token (e.g. offline at
-      // startup): the pairing session is ready, but the saved login is kept
-      // and can be re-verified via Check for Auth.
-      statusMessage.value =
-        "Cannot reach the backend. Your saved login was kept — tap Check for Auth to retry.";
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), STARTUP_TIMEOUT_MS);
+    try {
+      const restored = await restoreExistingToken(controller.signal);
+      if (restored || controller.signal.aborted) return;
+      await createSession(controller.signal);
+      if (getStoredDeviceToken()) {
+        statusMessage.value = savedLoginRetryMessage;
+      }
+    } catch (err) {
+      authState.value = "error";
+      statusMessage.value = getStoredDeviceToken()
+        ? savedLoginRetryMessage
+        : "Could not start device pairing. Try again.";
+      logger.error("auth", "Device auth initialization failed", err);
+    } finally {
+      clearTimeout(timeout);
     }
   }
 

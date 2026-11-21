@@ -61,9 +61,6 @@ watch(
 
 onMounted(() => {
   startWidgetSync();
-  if (isAuthenticated.value) {
-    void refreshWidgets();
-  }
 });
 </script>
 

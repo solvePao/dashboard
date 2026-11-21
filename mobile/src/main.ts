@@ -1,12 +1,15 @@
 import { createApp } from 'vue'
 import './style.css'
 import App from './App.vue'
+import { useDeviceAuth } from './composables/useDeviceAuth'
 import { useTheme } from './composables/useTheme'
 import { logger } from './lib/logger'
 
-// Apply persisted theme before first paint
-useTheme()
+async function startApp(): Promise<void> {
+  useTheme()
+  await useDeviceAuth().init()
+  createApp(App).mount('#app')
+  logger.info('app', 'mobile frontend initialized')
+}
 
-logger.info('app', 'mobile frontend initialized')
-
-createApp(App).mount('#app')
+void startApp()

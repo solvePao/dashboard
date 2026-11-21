@@ -24,10 +24,35 @@ pub struct PairingCommitRequest {
     pub user: User,
 }
 
+/// Pairing lifecycle values, serialized identically in storage and API responses.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PairingStatus {
+    Pending,
+    Authorized,
+    Expired,
+}
+
+impl PairingStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Authorized => "authorized",
+            Self::Expired => "expired",
+        }
+    }
+}
+
+impl std::fmt::Display for PairingStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 /// Durable Object pairing snapshot, shared by commit/status/push.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PairingState {
-    pub status: String,
+    pub status: PairingStatus,
     pub expires_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
@@ -67,7 +92,7 @@ pub struct AuthorizeDeviceRequest {
 
 #[derive(Debug, Serialize)]
 pub struct AuthorizeDeviceResponse {
-    pub status: String,
+    pub status: PairingStatus,
     pub session_id: String,
     pub device_name: String,
     pub message: String,
@@ -80,7 +105,7 @@ pub struct CheckSessionRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckSessionResponse {
-    pub status: String,
+    pub status: PairingStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

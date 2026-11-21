@@ -5,6 +5,7 @@ import { useOrientationLock } from "../composables/useOrientationLock";
 export interface PagerItem {
   key: string;
   label?: string;
+  reserveNavigationSpace?: boolean;
 }
 
 const props = withDefaults(
@@ -35,6 +36,8 @@ const currentIndex = computed(() => {
   const idx = props.items.findIndex((item) => item.key === props.modelValue);
   return idx >= 0 ? idx : 0;
 });
+
+const reserveNavigationSpace = computed(() => props.items.length > 1 && props.items[currentIndex.value]?.reserveNavigationSpace);
 
 const transitionName = computed(() => {
   return direction.value === "up" ? "v-slide-up" : "v-slide-down";
@@ -177,7 +180,7 @@ onBeforeUnmount(() => {
     @touchend.passive="onTouchEnd"
     @wheel="onWheel"
   >
-    <div class="relative flex-1 w-full h-full overflow-hidden">
+    <div class="relative min-h-0 flex-1 w-full overflow-hidden">
       <Transition :name="transitionName">
         <div
           :key="modelValue"
@@ -190,21 +193,24 @@ onBeforeUnmount(() => {
       </Transition>
     </div>
 
-    <!-- Floating Morphing Pagination Dots -->
     <div
       v-if="items.length > 1"
-      class="pointer-events-auto absolute bottom-2 inset-x-0 z-30 flex items-center justify-center gap-1.5 py-1"
+      class="z-30 flex items-center justify-center"
+      :class="reserveNavigationSpace ? 'h-11 shrink-0 border-t border-border/70' : 'absolute bottom-2 inset-x-0 gap-1.5 py-1'"
     >
       <button
         v-for="(item, idx) in items"
         :key="item.key"
         type="button"
-        class="h-1.5 rounded-full transition-all duration-300 cursor-pointer"
-        :class="getDotClass(idx)"
+        class="flex cursor-pointer items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        :class="reserveNavigationSpace ? 'h-11 w-11' : undefined"
+        :aria-current="idx === currentIndex ? 'true' : undefined"
         :aria-label="item.label || item.key"
         :title="item.label || item.key"
         @click="goToIndex(idx)"
-      />
+      >
+        <span aria-hidden="true" class="block h-1.5 rounded-full transition-all duration-300" :class="getDotClass(idx)" />
+      </button>
     </div>
   </div>
 </template>

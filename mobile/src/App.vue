@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { ref } from "vue";
 import { Settings } from "@lucide/vue";
 import HorizontalSplitLayout from "./components/HorizontalSplitLayout.vue";
 import DeviceLeftPanel from "./components/DeviceLeftPanel.vue";
@@ -10,14 +10,10 @@ import { useOrientationLock } from "./composables/useOrientationLock";
 import type { SplitRatio } from "./types/layout";
 
 const ratio: SplitRatio = "50-50";
-const { init, isAuthenticated } = useDeviceAuth();
+const { isAuthenticated } = useDeviceAuth();
 const { isFullscreen, fullscreenSupported, fullscreenPending, fullscreenError, toggleFullscreen } = useOrientationLock();
 
 const showSettingsModal = ref(false);
-
-onMounted(() => {
-  void init();
-});
 </script>
 
 <template>
