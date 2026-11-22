@@ -20,7 +20,8 @@ pub fn upsert_user_sql() -> String {
         "INSERT INTO users (google_sub, email, name, picture_url, last_login_at) \
          VALUES (?1, ?2, ?3, ?4, {SQL_NOW}) \
          ON CONFLICT(google_sub) DO UPDATE SET email = excluded.email, name = excluded.name, \
-         picture_url = excluded.picture_url, last_login_at = {SQL_NOW}, updated_at = {SQL_NOW}"
+         picture_url = excluded.picture_url, last_login_at = {SQL_NOW}, updated_at = {SQL_NOW} \
+         RETURNING {USER_COLUMNS}"
     )
 }
 
@@ -50,7 +51,8 @@ pub fn upsert_pairing_code_sql() -> String {
         "INSERT INTO pairing_codes (session_id, short_code, expires_at, created_at) \
          VALUES (?1, ?2, {SESSION_EXPIRY_SQL}, {SQL_NOW}) \
          ON CONFLICT(session_id) DO UPDATE SET short_code = excluded.short_code, \
-         expires_at = {SESSION_EXPIRY_SQL}, created_at = {SQL_NOW}"
+         expires_at = {SESSION_EXPIRY_SQL}, created_at = {SQL_NOW} \
+         RETURNING session_id, short_code, expires_at"
     )
 }
 

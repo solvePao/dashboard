@@ -1,5 +1,5 @@
 #[cfg(not(any(test, coverage)))]
-use worker::D1Database;
+use worker::{Context, D1Database};
 
 use crate::common::DeviceLifecycleKind;
 #[cfg(not(any(test, coverage)))]
@@ -78,6 +78,17 @@ impl DeviceNotifier for NoNotify {
 pub trait WidgetStore {
     async fn store_device_token_owner(&self, token: &str) -> AppResult<Option<i64>>;
     async fn store_get_device_widgets(&self, token: &str) -> AppResult<Vec<DeviceWidget>>;
+    async fn store_get_authorized_device_widgets(
+        &self,
+        token: &str,
+        owner: Option<i64>,
+    ) -> AppResult<Option<Vec<DeviceWidget>>> {
+        let authorized = self.store_device_token_owner(token).await?;
+        if authorized.is_some_and(|uid| owner.is_none_or(|owner| owner == uid)) {
+            return self.store_get_device_widgets(token).await.map(Some);
+        }
+        Ok(None)
+    }
     async fn store_replace_device_widgets(
         &self,
         token: &str,
@@ -116,7 +127,10 @@ pub trait PairingClient {
 pub struct D1Stores<'a>(pub &'a D1Database);
 
 #[cfg(not(any(test, coverage)))]
-impl UserStore for D1Stores<'_> {
+pub struct D1UserStore<'a>(pub &'a D1Database, pub Option<&'a Context>);
+
+#[cfg(not(any(test, coverage)))]
+impl UserStore for D1UserStore<'_> {
     async fn store_get_user_by_sub(&self, sub: &str) -> AppResult<Option<User>> {
         db::get_user_by_sub(self.0, sub).await.map_err(|err| {
             worker::console_error!("D1 query failed: {err:?}");
@@ -131,7 +145,7 @@ impl UserStore for D1Stores<'_> {
     }
 
     async fn store_get_user_by_device_token(&self, token: &str) -> AppResult<Option<User>> {
-        db::get_user_by_device_token(self.0, token)
+        db::get_user_by_device_token(self.0, token, self.1)
             .await
             .map_err(|_| AppError::bad_gateway("Database error."))
     }
@@ -227,6 +241,16 @@ impl WidgetStore for D1Stores<'_> {
         db::get_device_widgets(self.0, token)
             .await
             .map_err(|_| AppError::bad_gateway("Failed to fetch widgets."))
+    }
+
+    async fn store_get_authorized_device_widgets(
+        &self,
+        token: &str,
+        owner: Option<i64>,
+    ) -> AppResult<Option<Vec<DeviceWidget>>> {
+        db::devices::get_authorized_device_widgets(self.0, token, owner)
+            .await
+            .map_err(|_| AppError::bad_gateway("Failed to load device widgets."))
     }
 
     async fn store_replace_device_widgets(

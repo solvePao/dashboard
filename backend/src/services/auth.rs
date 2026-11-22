@@ -2,7 +2,7 @@
 use worker::*;
 
 #[cfg(not(any(test, coverage)))]
-use super::store::D1Stores;
+use super::store::D1UserStore;
 use super::store::UserStore;
 use crate::models::auth::{GoogleProfile, LoginResponse, TokenInfo, User};
 use crate::models::error::{AppError, AppResult};
@@ -118,7 +118,14 @@ impl AuthService {
         let secret = crate::utils::jwt_secret(env)?;
         let now_secs = Date::now().as_millis() / 1000;
         let verifier = EnvVerifier(env);
-        Self::login_with_google_with(&D1Stores(db), &verifier, id_token, &secret, now_secs).await
+        Self::login_with_google_with(
+            &D1UserStore(db, None),
+            &verifier,
+            id_token,
+            &secret,
+            now_secs,
+        )
+        .await
     }
 
     pub async fn login_with_google_with<S, V>(
@@ -161,11 +168,21 @@ impl AuthService {
     /// a `sub` alone proves nothing, so it must never authenticate.
     #[cfg(not(any(test, coverage)))]
     pub async fn authenticate(token: &str, env: &Env, db: &D1Database) -> AppResult<User> {
+        Self::authenticate_with_context(token, env, db, None).await
+    }
+
+    #[cfg(not(any(test, coverage)))]
+    pub async fn authenticate_with_context(
+        token: &str,
+        env: &Env,
+        db: &D1Database,
+        context: Option<&Context>,
+    ) -> AppResult<User> {
         // Fail closed: a missing/short secret is 503, never a silent skip of
         // the JWT path (which would hide misconfiguration as 401s).
         let secret = crate::utils::jwt_secret(env)?;
         let now_secs = Date::now().as_millis() / 1000;
-        Self::authenticate_with(&D1Stores(db), token, &secret, now_secs).await
+        Self::authenticate_with(&D1UserStore(db, context), token, &secret, now_secs).await
     }
 
     pub async fn authenticate_with<S>(
@@ -211,7 +228,7 @@ impl AuthService {
     /// Fetches a user by their Google subject ID.
     #[cfg(not(any(test, coverage)))]
     pub async fn get_user_by_sub(db: &D1Database, sub: &str) -> AppResult<User> {
-        Self::get_user_by_sub_with(&D1Stores(db), sub).await
+        Self::get_user_by_sub_with(&D1UserStore(db, None), sub).await
     }
 
     pub async fn get_user_by_sub_with<S>(store: &S, sub: &str) -> AppResult<User>

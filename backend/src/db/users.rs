@@ -32,23 +32,33 @@ pub async fn upsert_user(
         text_or_null(picture_url),
     ];
     let stmt = db.prepare(queries::upsert_user_sql());
-    stmt.bind_refs(&args)?.run().await?;
-
-    get_user_by_sub(db, google_sub)
+    stmt.bind_refs(&args)?
+        .first::<User>(None)
         .await?
-        .ok_or_else(|| Error::RustError("Failed to load user after upsert.".to_string()))
+        .ok_or_else(|| Error::RustError("User upsert returned no row.".to_string()))
 }
 
-pub async fn get_user_by_device_token(db: &D1Database, token: &str) -> Result<Option<User>> {
+pub async fn get_user_by_device_token(
+    db: &D1Database,
+    token: &str,
+    context: Option<&Context>,
+) -> Result<Option<User>> {
     let stmt = db.prepare(queries::get_user_by_device_token_sql());
     let args = [D1Type::Text(token)];
     let user = stmt.bind_refs(&args)?.first::<User>(None).await?;
 
     if user.is_some() {
-        // Update last_used_at
-        let update_stmt = db.prepare(queries::touch_device_token_sql());
-        let update_args = [D1Type::Text(token)];
-        let _ = update_stmt.bind_refs(&update_args)?.run().await;
+        let update = db
+            .prepare(queries::touch_device_token_sql())
+            .bind_refs(&args)?;
+        let record_usage = async move {
+            let _ = update.run().await;
+        };
+        if let Some(context) = context {
+            context.wait_until(record_usage);
+        } else {
+            record_usage.await;
+        }
     }
 
     Ok(user)

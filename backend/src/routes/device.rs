@@ -219,7 +219,11 @@ pub async fn live_pairing(req: Request, ctx: RouteContext<()>) -> Result<Respons
 }
 
 /// Single mux socket for an authorized device (channels `device` + `walkie`).
-pub async fn live_device(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn live_device(
+    req: Request,
+    ctx: RouteContext<()>,
+    context: &Context,
+) -> Result<Response> {
     let token = match validation::require_route_token(ctx.param("token").map(String::as_str)) {
         Ok(t) => t,
         Err(err) => return err.to_response(),
@@ -228,7 +232,7 @@ pub async fn live_device(req: Request, ctx: RouteContext<()>) -> Result<Response
         Ok(db) => db,
         Err(err) => return err.to_response(),
     };
-    match crate::db::users::get_user_by_device_token(&db, &token).await {
+    match crate::db::users::get_user_by_device_token(&db, &token, Some(context)).await {
         Ok(Some(_)) => {}
         Ok(None) => return json_error("Device token not found or expired.", 401),
         Err(_) => return json_error("Database error.", 500),
@@ -328,15 +332,12 @@ pub async fn revoke_device(req: Request, ctx: RouteContext<()>) -> Result<Respon
     // Revoke authorization first. No outstanding ticket can reconnect while teardown runs.
     match DeviceService::revoke_device(&db, &ctx.env, user.id, &token_to_revoke, kind).await {
         Ok(revoked) => {
-            let mut cleanup_pending = false;
-            for group_id in group_ids {
-                cleanup_pending |= crate::walkie::repository::invalidate_device(
-                    &ctx.env,
-                    &group_id,
-                    &token_to_revoke,
-                )
-                .await;
-            }
+            let cleanup_pending = crate::walkie::repository::invalidate_device_groups(
+                &ctx.env,
+                &token_to_revoke,
+                group_ids,
+            )
+            .await;
             Ok(
                 json_ok(&serde_json::json!({"revoked":revoked,"cleanup_pending":cleanup_pending}))?
                     .with_status(if cleanup_pending { 202 } else { 200 }),

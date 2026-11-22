@@ -54,11 +54,14 @@ impl WalkieGroupObject {
                         Some(room.cleanup.remove(0))
                     }
                 });
+                let Some(session) = session else {
+                    return Ok(None);
+                };
                 let started = now();
-                room.cleanup_in_flight = session.clone();
+                room.cleanup_in_flight = Some(session.clone());
                 room.cleanup_started_at = started;
                 coordinator.save(&room).await.map_err(db_error)?;
-                Ok(session.map(|session| (session, started)))
+                Ok(Some((session, started)))
             })
             .await?;
         let Some((mut session, started)) = pending else {

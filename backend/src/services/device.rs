@@ -472,8 +472,10 @@ impl DeviceService {
     where
         S: WidgetStore + Sync,
     {
-        Self::require_token_owner(store, user_id, token).await?;
-        store.store_get_device_widgets(token).await
+        store
+            .store_get_authorized_device_widgets(token, Some(user_id))
+            .await?
+            .ok_or_else(|| AppError::not_found("Device not found."))
     }
 
     /// Reads one device's widget set using the device token itself as
@@ -487,10 +489,10 @@ impl DeviceService {
     where
         S: WidgetStore + Sync,
     {
-        match store.store_device_token_owner(token).await? {
-            Some(_) => store.store_get_device_widgets(token).await,
-            None => Err(AppError::unauthorized("Device token not found or expired.")),
-        }
+        store
+            .store_get_authorized_device_widgets(token, None)
+            .await?
+            .ok_or_else(|| AppError::unauthorized("Device token not found or expired."))
     }
 
     /// Replaces one device's widget set for its owner, then pushes the

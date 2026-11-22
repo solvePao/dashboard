@@ -1,6 +1,8 @@
 #[cfg(not(any(test, coverage)))]
 use worker::*;
 #[cfg(not(any(test, coverage)))]
+use futures_util::stream::{self, StreamExt};
+#[cfg(not(any(test, coverage)))]
 use serde::{Deserialize, Serialize};
 #[cfg(not(any(test, coverage)))]
 use serde_json::{json, Value};
@@ -428,10 +430,12 @@ impl DurableObject for ClientGatewayObject {
             _ => {
                 // Single heartbeat keeps every walkie subscription alive.
                 if data.get("type").and_then(Value::as_str) == Some("heartbeat") {
-                    for sub in att.walkie.clone() {
-                        if sub.protocol_version != 2 { continue; }
-                        let _ = self.room_fetch(&sub.group_id, "/gateway-signal", &json!({"token": att.id, "connection_id": sub.connection_id, "message": {"type":"heartbeat"}})).await;
-                    }
+                    let token = &att.id;
+                    stream::iter(att.walkie.iter().filter(|sub| {
+                        sub.protocol_version == 2 && !sub.connection_id.is_empty()
+                    })).for_each_concurrent(5, |sub| async move {
+                        let _ = self.room_fetch(&sub.group_id, "/gateway-signal", &json!({"token":token,"connection_id":sub.connection_id,"message":{"type":"heartbeat"}})).await;
+                    }).await;
                 }
             }
         }
