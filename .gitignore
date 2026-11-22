@@ -6,3 +6,5 @@
 dist/
 **.agents/
 .agents/mcp_config.json
+
+**/.pnpm-store/**

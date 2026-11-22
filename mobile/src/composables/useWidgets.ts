@@ -18,17 +18,26 @@ const widgetsError = ref<string | null>(null);
  * and surfaces a retryable error — it never blanks the screen.
  */
 export function useWidgets() {
+  function resetWidgets(): void {
+    widgets.value = [];
+    widgetsLoading.value = false;
+    widgetsError.value = null;
+  }
+
   async function refreshWidgets(): Promise<void> {
     const token = getStoredDeviceToken();
     if (!token) {
-      widgets.value = [];
+      resetWidgets();
       return;
     }
     widgetsLoading.value = true;
     try {
-      widgets.value = await fetchOwnWidgetsApi(token);
+      const next = await fetchOwnWidgetsApi(token);
+      if (getStoredDeviceToken() !== token) return;
+      widgets.value = next;
       widgetsError.value = null;
     } catch (err) {
+      if (getStoredDeviceToken() !== token) return;
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
         // Auth state owns token invalidation; keep serving last state.
         logger.warn("widgets", "widget fetch rejected; keeping last state");
@@ -37,7 +46,7 @@ export function useWidgets() {
         logger.warn("widgets", "widget refresh failed; keeping last state");
       }
     } finally {
-      widgetsLoading.value = false;
+      if (getStoredDeviceToken() === token) widgetsLoading.value = false;
     }
   }
 
@@ -65,6 +74,7 @@ export function useWidgets() {
     widgets,
     widgetsLoading,
     widgetsError,
+    resetWidgets,
     refreshWidgets,
     startWidgetSync,
   };

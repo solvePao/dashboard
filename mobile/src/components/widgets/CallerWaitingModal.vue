@@ -4,6 +4,8 @@ import { DialogRoot, DialogPortal, DialogOverlay, DialogContent, DialogTitle, Di
 import { useCaller } from "../../composables/useWalkieTalkie";
 import CallerInvitations from "./CallerInvitations.vue";
 
+defineProps<{ target: string }>();
+
 const { waitingModalOpen, pendingCalls, inLiveCall } = useCaller();
 
 function updateOpen(open: boolean): void {
@@ -13,7 +15,7 @@ function updateOpen(open: boolean): void {
 
 <template>
   <DialogRoot :open="waitingModalOpen && inLiveCall && pendingCalls.length > 0" @update:open="updateOpen">
-    <DialogPortal to=".caller-widget-root">
+    <DialogPortal :to="target">
       <DialogOverlay class="absolute inset-0 z-50 bg-black/60" @touchstart.stop @touchend.stop @wheel.stop />
       <DialogContent
         class="absolute left-1/2 top-1/2 z-50 flex max-h-[calc(100%_-_1rem)] w-[calc(100%_-_1.5rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 flex-col gap-2 overflow-hidden rounded-2xl border border-border bg-card p-3 text-card-foreground shadow-xl focus:outline-none"

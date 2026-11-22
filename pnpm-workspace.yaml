@@ -1,6 +1,8 @@
 # Deployment tooling only; the applications keep their own workspaces and locks.
 packages:
   - '.'
+overrides:
+  "undici@7": 7.30.1
 allowBuilds:
   esbuild: true
   workerd: true
