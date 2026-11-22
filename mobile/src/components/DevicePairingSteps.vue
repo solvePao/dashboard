@@ -21,7 +21,7 @@ const isNotableStatusMessage = computed(() => {
     lower.includes("revoked") ||
     lower.includes("error") ||
     lower.includes("failed") ||
-    lower.includes("cannot reach")
+    lower.includes("saved login kept")
   );
 });
 </script>

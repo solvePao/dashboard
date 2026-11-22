@@ -14,11 +14,10 @@ function updateOpen(open: boolean): void {
 <template>
   <DialogRoot :open="waitingModalOpen && inLiveCall && pendingCalls.length > 0" @update:open="updateOpen">
     <DialogPortal to=".caller-widget-root">
-      <DialogOverlay class="absolute inset-0 z-50 bg-black/60" />
+      <DialogOverlay class="absolute inset-0 z-50 bg-black/60" @touchstart.stop @touchend.stop @wheel.stop />
       <DialogContent
-        class="absolute left-1/2 top-1/2 z-50 flex max-h-[calc(100%_-_1.5rem)] w-[calc(100%_-_1.5rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 flex-col gap-3 overflow-hidden rounded-2xl border border-border bg-card p-4 text-card-foreground shadow-xl focus:outline-none"
+        class="absolute left-1/2 top-1/2 z-50 flex max-h-[calc(100%_-_1rem)] w-[calc(100%_-_1.5rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 flex-col gap-2 overflow-hidden rounded-2xl border border-border bg-card p-3 text-card-foreground shadow-xl focus:outline-none"
         @touchstart.stop
-        @touchmove.stop
         @touchend.stop
         @wheel.stop
       >
@@ -36,7 +35,7 @@ function updateOpen(open: boolean): void {
             <X class="h-4 w-4" aria-hidden="true" />
           </DialogClose>
         </div>
-        <div class="min-h-0 overflow-y-auto overscroll-contain">
+        <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           <CallerInvitations :calls="pendingCalls" waiting />
         </div>
       </DialogContent>

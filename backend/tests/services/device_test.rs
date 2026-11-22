@@ -3,7 +3,9 @@ use std::sync::Mutex;
 
 use backend::common::DeviceLifecycleKind;
 use backend::models::auth::User;
-use backend::models::device::{CheckSessionResponse, DeviceToken, PairingCode, PairingState};
+use backend::models::device::{
+    CheckSessionResponse, DeviceToken, PairingCode, PairingState, PairingStatus,
+};
 use backend::models::error::{AppError, AppResult};
 use backend::services::device::DeviceService;
 use backend::services::store::{DeviceNotifier, HubNotifier, NoNotify, PairingClient, PairingStore};
@@ -23,7 +25,7 @@ fn sample_user(id: i64) -> User {
 
 fn pending_state(expires: &str) -> PairingState {
     PairingState {
-        status: "pending".to_string(),
+        status: PairingStatus::Pending,
         expires_at: expires.to_string(),
         token: None,
         user: None,
@@ -31,9 +33,9 @@ fn pending_state(expires: &str) -> PairingState {
 }
 
 fn as_check(state: &PairingState) -> CheckSessionResponse {
-    let authorized = state.status == "authorized";
+    let authorized = state.status == PairingStatus::Authorized;
     CheckSessionResponse {
-        status: state.status.clone(),
+        status: state.status,
         token: if authorized { state.token.clone() } else { None },
         user: if authorized { state.user.clone() } else { None },
     }
@@ -229,7 +231,7 @@ impl PairingClient for FakePairingClient {
         }
         let mut states = self.states.lock().unwrap();
         if let Some(existing) = states.get(session_id) {
-            if existing.status == "authorized" {
+            if existing.status == PairingStatus::Authorized {
                 return Ok(existing.clone());
             }
         }
@@ -258,15 +260,15 @@ impl PairingClient for FakePairingClient {
         let current = self.states.lock().unwrap().get(session_id).cloned();
         match current {
             None => Err(AppError::not_found("Pending session not found or expired.")),
-            Some(s) if s.status == "authorized" => Ok(false),
-            Some(s) if s.status != "pending" => {
+            Some(s) if s.status == PairingStatus::Authorized => Ok(false),
+            Some(s) if s.status != PairingStatus::Pending => {
                 Err(AppError::not_found("Pending session not found or expired."))
             }
             Some(s) => {
                 self.states.lock().unwrap().insert(
                     session_id.to_string(),
                     PairingState {
-                        status: "authorized".to_string(),
+                        status: PairingStatus::Authorized,
                         expires_at: s.expires_at,
                         token: Some(device_token.to_string()),
                         user: Some(user.clone()),
@@ -411,7 +413,7 @@ async fn create_session_never_reopens_authorized() {
     .unwrap();
     assert_eq!(again.session_id, sid);
     let status = DeviceService::check_session_with(&client, &sid).await.unwrap();
-    assert_eq!(status.status, "authorized");
+    assert_eq!(status.status, PairingStatus::Authorized);
     assert_eq!(status.token.as_deref(), Some("tok-first"));
 }
 
@@ -422,7 +424,7 @@ async fn create_session_resets_non_authorized_session() {
     client.seed(
         &sid,
         PairingState {
-            status: "expired".to_string(),
+            status: PairingStatus::Expired,
             expires_at: "e".to_string(),
             token: None,
             user: None,
@@ -435,7 +437,7 @@ async fn create_session_resets_non_authorized_session() {
     .unwrap();
     assert_eq!(res.session_id, sid);
     let status = DeviceService::check_session_with(&client, &sid).await.unwrap();
-    assert_eq!(status.status, "pending");
+    assert_eq!(status.status, PairingStatus::Pending);
 }
 
 #[tokio::test]
@@ -452,7 +454,7 @@ async fn authorize_ok_with_defaults_and_custom_name() {
     })
     .await
     .unwrap();
-    assert_eq!(res.status, "authorized");
+    assert_eq!(res.status, PairingStatus::Authorized);
     assert_eq!(res.device_name, "Mobile Device");
 
     // Second session with custom name and short-code lookup.
@@ -576,7 +578,7 @@ async fn authorize_rejects_empty_missing_and_expired() {
     client.seed(
         &sid,
         PairingState {
-            status: "expired".to_string(),
+            status: PairingStatus::Expired,
             expires_at: "e".to_string(),
             token: None,
             user: None,
@@ -705,35 +707,35 @@ async fn check_session_pending_authorized_expired() {
     let sid = valid_session_id();
     client.seed(&sid, pending_state("2099-01-01T00:00:00.000Z"));
     let pending = DeviceService::check_session_with(&client, &sid).await.unwrap();
-    assert_eq!(pending.status, "pending");
+    assert_eq!(pending.status, PairingStatus::Pending);
     assert!(pending.token.is_none());
 
     // Authorized returns token + user; pending views never leak them.
     client.seed(
         &sid,
         PairingState {
-            status: "authorized".to_string(),
+            status: PairingStatus::Authorized,
             expires_at: "e".to_string(),
             token: Some("tok-9".to_string()),
             user: Some(sample_user(9)),
         },
     );
     let got = DeviceService::check_session_with(&client, &sid).await.unwrap();
-    assert_eq!(got.status, "authorized");
+    assert_eq!(got.status, PairingStatus::Authorized);
     assert_eq!(got.token.as_deref(), Some("tok-9"));
     assert_eq!(got.user.map(|u| u.id), Some(9));
 
     client.seed(
         "expsess",
         PairingState {
-            status: "expired".to_string(),
+            status: PairingStatus::Expired,
             expires_at: "e".to_string(),
             token: None,
             user: None,
         },
     );
     let got = DeviceService::check_session_with(&client, "expsess").await.unwrap();
-    assert_eq!(got.status, "expired");
+    assert_eq!(got.status, PairingStatus::Expired);
     assert!(got.token.is_none());
 }
 
@@ -863,7 +865,7 @@ async fn authorize_and_notify_hub() {
     .await
     .unwrap();
 
-    assert_eq!(res.status, "authorized");
+    assert_eq!(res.status, PairingStatus::Authorized);
     // Verify Hub was notified of authorization
     let calls = hub.calls.lock().unwrap().clone();
     assert_eq!(calls.len(), 1);
@@ -999,15 +1001,17 @@ async fn reauthorize_ok_preserves_device_name_and_renews_token() {
     .await
     .unwrap();
 
-    assert_eq!(res.status, "authorized");
+    assert_eq!(res.status, PairingStatus::Authorized);
     assert_eq!(res.device_name, "Kitchen iPad");
     assert_eq!(res.session_id, sid);
 
     // Verify token was renewed in store
-    let tokens = store.tokens.lock().unwrap();
-    let tok = tokens.iter().find(|t| t.token == "existing-device-token").unwrap();
-    assert_eq!(tok.expires_at, "renewed");
-    assert_eq!(tok.last_used_at.as_deref(), Some("now"));
+    {
+        let tokens = store.tokens.lock().unwrap();
+        let tok = tokens.iter().find(|t| t.token == "existing-device-token").unwrap();
+        assert_eq!(tok.expires_at, "renewed");
+        assert_eq!(tok.last_used_at.as_deref(), Some("now"));
+    }
 
     // Verify client received the existing token
     let status = DeviceService::check_session_with(&client, &sid).await.unwrap();
@@ -1212,7 +1216,7 @@ async fn reauthorize_rejects_expired_status() {
     DeviceService::create_session_with(&store, &client, &sid, |_| Ok("<svg/>".to_string()))
         .await
         .unwrap();
-    client.states.lock().unwrap().get_mut(&sid).unwrap().status = "expired".to_string();
+    client.states.lock().unwrap().get_mut(&sid).unwrap().status = PairingStatus::Expired;
     let user = sample_user(42);
     store.tokens.lock().unwrap().push(DeviceToken {
         token: "tok-exp".to_string(),

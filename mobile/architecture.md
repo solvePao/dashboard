@@ -67,7 +67,7 @@ mobile/
     │   │   ├── AnalogClockView.vue   # SVG analog dial with smooth 60fps sweep / mechanical tick and date window
     │   │   └── MonthCalendarView.vue # Interactive monthly calendar grid with month/year navigation and Today reset
     │   ├── widgets/
-    │   │   ├── WeatherWidget.vue  # Full weather display with multi-city horizontal swipe animation, live condition mapping, and interactive FX preview
+    │   │   ├── WeatherWidget.vue  # Full weather display with multi-city horizontal swipe animation, automatic effects based on the selected city's weather
     │   │   ├── WeatherEffects.vue # GPU-accelerated atmospheric visual shaders (sunlight, day/night rain, cloud, sandstorm, snow, chilly night)
     │   │   ├── StockWidget.vue    # Full stock display with live quotes, frontend-configured performance period, clean grid (no topbar), icon-only back button, day range, metrics grid
     │   │   ├── WalkieTalkieWidget.vue # Compact zero-scroll PTT widget fitting 100% on mobile phone screens

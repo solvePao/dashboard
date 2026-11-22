@@ -9,6 +9,42 @@ use serde_json::{json, Value};
 pub struct WalkieRepository<'a>(pub &'a D1Database);
 
 impl WalkieRepository<'_> {
+    pub async fn first_owned_group_id(&self, user_id: i64) -> AppResult<Option<String>> {
+        #[derive(Deserialize)]
+        struct OwnedGroup {
+            id: String,
+        }
+
+        Ok(self
+            .rows::<OwnedGroup>(
+                "SELECT id FROM walkie_groups WHERE owner_id=? ORDER BY created_at ASC LIMIT 1",
+                &[user_id_param(user_id).map_err(db_error)?],
+            )
+            .await?
+            .into_iter()
+            .next()
+            .map(|group| group.id))
+    }
+
+    pub async fn device_group_ids(&self, user_id: i64, token: &str) -> AppResult<Vec<String>> {
+        #[derive(Deserialize)]
+        struct GroupMembership {
+            group_id: String,
+        }
+
+        let user_param = user_id_param(user_id).map_err(|_| AppError::internal("Invalid user."))?;
+        let memberships = self
+            .rows::<GroupMembership>(
+                "SELECT m.group_id FROM walkie_device_members m JOIN device_tokens t ON t.token=m.token WHERE m.token=? AND t.user_id=?",
+                &[D1Type::Text(token), user_param],
+            )
+            .await?;
+        Ok(memberships
+            .into_iter()
+            .map(|membership| membership.group_id)
+            .collect())
+    }
+
     pub async fn rows<T: DeserializeOwned>(
         &self,
         sql: &str,

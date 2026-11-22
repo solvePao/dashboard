@@ -15,6 +15,7 @@ use crate::common::DeviceLifecycleKind;
 use crate::models::auth::User;
 use crate::models::device::{
     AuthorizeDeviceResponse, CheckSessionResponse, CreateSessionResponse, DeviceToken, DeviceWidget,
+    PairingStatus,
 };
 use crate::models::error::{AppError, AppResult};
 use crate::utils;
@@ -51,7 +52,7 @@ impl DeviceService {
 
         // A finished pairing is never reopened by re-creating it.
         if let Some(status) = client.client_status(&trimmed_id).await? {
-            if status.status == "authorized" {
+            if status.status == PairingStatus::Authorized {
                 let row = store
                     .store_get_pairing_code(&trimmed_id)
                     .await?
@@ -182,12 +183,12 @@ impl DeviceService {
             .client_status(&session_id)
             .await?
             .ok_or_else(|| AppError::not_found("Pending session not found or expired."))?;
-        match status.status.as_str() {
-            "authorized" => {
+        match status.status {
+            PairingStatus::Authorized => {
                 return Err(AppError::new("Session was already authorized.", 409));
             }
-            "pending" => {}
-            _ => {
+            PairingStatus::Pending => {}
+            PairingStatus::Expired => {
                 return Err(AppError::not_found(
                     "Pending session not found or expired.",
                 ));
@@ -205,7 +206,7 @@ impl DeviceService {
         // authorizer already committed (409 race); compensate by deleting the token.
         match client.client_commit(&session_id, &device_token, user).await {
             Ok(true) => Ok(AuthorizeDeviceResponse {
-                status: "authorized".to_string(),
+                status: PairingStatus::Authorized,
                 session_id,
                 device_name: name,
                 message: "Device successfully authorized.".to_string(),
@@ -317,12 +318,12 @@ impl DeviceService {
             .client_status(&session_id)
             .await?
             .ok_or_else(|| AppError::not_found("Pending session not found or expired."))?;
-        match status.status.as_str() {
-            "authorized" => {
+        match status.status {
+            PairingStatus::Authorized => {
                 return Err(AppError::new("Session was already authorized.", 409));
             }
-            "pending" => {}
-            _ => {
+            PairingStatus::Pending => {}
+            PairingStatus::Expired => {
                 return Err(AppError::not_found(
                     "Pending session not found or expired.",
                 ));
@@ -338,7 +339,7 @@ impl DeviceService {
 
         match client.client_commit(&session_id, target_token, user).await {
             Ok(true) => Ok(AuthorizeDeviceResponse {
-                status: "authorized".to_string(),
+                status: PairingStatus::Authorized,
                 session_id,
                 device_name: device.device_name,
                 message: "Device successfully re-authorized.".to_string(),

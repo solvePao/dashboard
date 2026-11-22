@@ -17,7 +17,6 @@ import {
   MapPin,
   Moon,
   RefreshCw,
-  Sparkles,
   Sun,
   Sunrise,
   Thermometer,
@@ -374,77 +373,6 @@ function conditionFor(
   };
 }
 
-const PREVIEW_PRESETS: Record<WeatherEffectType, ConditionStyle> = {
-  sunlight: {
-    label: "Sunlight (Clear)",
-    icon: Sun,
-    gradient: "from-amber-600 via-sky-900 to-slate-950",
-    effect: "sunlight",
-  },
-  day_rain: {
-    label: "Day Time Rain",
-    icon: CloudRain,
-    gradient: "from-sky-900 via-slate-900 to-slate-950",
-    effect: "day_rain",
-  },
-  night_rain: {
-    label: "Night Rain",
-    icon: CloudRain,
-    gradient: "from-slate-950 via-indigo-950 to-blue-950",
-    effect: "night_rain",
-  },
-  cloud: {
-    label: "Cloudy & Overcast",
-    icon: Cloud,
-    gradient: "from-slate-800 via-zinc-900 to-neutral-950",
-    effect: "cloud",
-  },
-  sandstorm: {
-    label: "Sandstorm",
-    icon: Wind,
-    gradient: "from-amber-700 via-stone-900 to-black",
-    effect: "sandstorm",
-  },
-  snow: {
-    label: "Snowfall",
-    icon: CloudSnow,
-    gradient: "from-blue-950 via-slate-900 to-slate-950",
-    effect: "snow",
-  },
-  chilly_night: {
-    label: "Chilly Night",
-    icon: ThermometerSnowflake,
-    gradient: "from-indigo-950 via-slate-950 to-cyan-950",
-    effect: "chilly_night",
-  },
-  thunderstorm: {
-    label: "Thunderstorm",
-    icon: CloudLightning,
-    gradient: "from-slate-950 via-purple-950 to-slate-900",
-    effect: "thunderstorm",
-  },
-};
-
-const PREVIEW_EFFECTS: { key: WeatherEffectType | null; label: string }[] = [
-  { key: null, label: "Live" },
-  { key: "sunlight", label: "Sunlight" },
-  { key: "day_rain", label: "Day Rain" },
-  { key: "night_rain", label: "Night Rain" },
-  { key: "cloud", label: "Cloud" },
-  { key: "sandstorm", label: "Sandstorm" },
-  { key: "snow", label: "Snow" },
-  { key: "chilly_night", label: "Chilly Night" },
-  { key: "thunderstorm", label: "Thunderstorm" },
-];
-
-const previewEffect = ref<WeatherEffectType | null>(null);
-
-function cyclePreviewEffect(): void {
-  const currentIdx = PREVIEW_EFFECTS.findIndex((p) => p.key === previewEffect.value);
-  const nextIdx = (currentIdx + 1) % PREVIEW_EFFECTS.length;
-  previewEffect.value = PREVIEW_EFFECTS[nextIdx].key;
-}
-
 function uvCategory(uv: number): string {
   if (uv < 3) return "Low";
   if (uv < 6) return "Moderate";
@@ -468,43 +396,15 @@ const currentError = computed<string | null>(() => {
   return errorMap.value[key] ?? null;
 });
 
-const displayWeather = computed<CurrentWeather | null>(() => {
-  if (currentWeather.value) return currentWeather.value;
-  if (previewEffect.value) {
-    return {
-      temperature: 21,
-      apparentTemperature: 20,
-      humidity: 55,
-      windSpeed: 15,
-      windDirection: 180,
-      windCardinal: "S",
-      weatherCode: 0,
-      isDay: previewEffect.value !== "night_rain" && previewEffect.value !== "chilly_night",
-      highToday: 25,
-      lowToday: 16,
-      precipitation: previewEffect.value === "day_rain" || previewEffect.value === "night_rain" ? 3.4 : 0,
-      precipitationProbability: previewEffect.value === "day_rain" || previewEffect.value === "night_rain" ? 85 : 10,
-      uvIndex: previewEffect.value === "sunlight" ? 7 : 3,
-      aqi: { aqi: previewEffect.value === "sandstorm" ? 280 : 38, category: previewEffect.value === "sandstorm" ? "Very Unhealthy" : "Good" },
-      sunrise: "06:18",
-      sunset: "18:42",
-      lastUpdated: "Preview",
-    };
-  }
-  return null;
-});
-
 const activeCondition = computed<ConditionStyle | null>(() => {
-  if (previewEffect.value) {
-    return PREVIEW_PRESETS[previewEffect.value];
-  }
-  if (!currentWeather.value) return null;
+  const weather = currentWeather.value;
+  if (!weather) return null;
   return conditionFor(
-    currentWeather.value.weatherCode,
-    currentWeather.value.isDay,
-    currentWeather.value.apparentTemperature,
-    currentWeather.value.aqi?.aqi,
-    currentWeather.value.windSpeed
+    weather.weatherCode,
+    weather.isDay,
+    weather.apparentTemperature,
+    weather.aqi?.aqi,
+    weather.windSpeed
   );
 });
 
@@ -646,7 +546,7 @@ onBeforeUnmount(() => {
         >
           <!-- Loading State (if no cached weather available for this city) -->
           <div
-            v-if="currentLoading && !displayWeather"
+            v-if="currentLoading && !currentWeather"
             class="mo-weather-loading flex h-full flex-col justify-between animate-pulse"
           >
             <div class="flex items-center justify-between">
@@ -667,7 +567,7 @@ onBeforeUnmount(() => {
 
           <!-- Error State -->
           <div
-            v-else-if="currentError && !displayWeather"
+            v-else-if="currentError && !currentWeather"
             class="mo-weather-error flex h-full flex-col items-center justify-center p-4 text-center"
           >
             <CloudFog class="h-12 w-12 text-white/60 mb-2" />
@@ -683,7 +583,7 @@ onBeforeUnmount(() => {
           </div>
 
           <!-- Weather View -->
-          <div v-else-if="displayWeather && activeCondition" class="flex h-full w-full flex-col justify-between">
+          <div v-else-if="currentWeather && activeCondition" class="flex h-full w-full flex-col justify-between">
             <!-- Top Header -->
             <div class="mo-weather-header flex items-center justify-between gap-2">
               <div class="flex min-w-0 items-center gap-1.5 text-xs font-medium text-white/95">
@@ -728,21 +628,8 @@ onBeforeUnmount(() => {
               </div>
 
               <div class="flex items-center gap-1.5 shrink-0">
-                <!-- Weather FX Preview Cycler -->
-                <button
-                  type="button"
-                  class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-tight transition cursor-pointer"
-                  :class="previewEffect ? 'bg-amber-400/30 text-amber-100 border border-amber-300/40 shadow-xs' : 'bg-white/15 text-white/80 hover:bg-white/25 hover:text-white'"
-                  aria-label="Cycle weather effect preview"
-                  :title="previewEffect ? `Previewing: ${activeCondition.label} (click to cycle)` : 'Click to preview weather visual effects'"
-                  @click.stop="cyclePreviewEffect"
-                >
-                  <Sparkles class="h-3 w-3" />
-                  <span>{{ previewEffect ? PREVIEW_PRESETS[previewEffect].label : 'FX' }}</span>
-                </button>
-
                 <span class="text-[10px] font-medium text-white/70">
-                  {{ displayWeather.lastUpdated }}
+                  {{ currentWeather.lastUpdated }}
                 </span>
                 <button
                   type="button"
@@ -759,24 +646,19 @@ onBeforeUnmount(() => {
 
             <!-- Main Hero Section -->
             <div class="mo-weather-hero my-auto flex items-center justify-between gap-4 py-1">
-              <div
-                class="flex items-center gap-3 sm:gap-4 cursor-pointer group"
-                title="Click to cycle weather visual effects"
-                @click="cyclePreviewEffect"
-              >
+              <div class="flex items-center gap-3 sm:gap-4">
                 <component
                   :is="activeCondition.icon"
-                  class="h-14 w-14 sm:h-16 sm:w-16 shrink-0 text-white drop-shadow-md group-hover:scale-105 transition-transform"
+                  class="h-14 w-14 sm:h-16 sm:w-16 shrink-0 text-white drop-shadow-md"
                 />
                 <div>
                   <div class="flex items-baseline gap-1.5">
                     <span class="text-5xl sm:text-6xl font-black tracking-tight leading-none drop-shadow-sm">
-                      {{ Math.round(displayWeather.temperature) }}°
+                      {{ Math.round(currentWeather.temperature) }}°
                     </span>
                   </div>
-                  <p class="mt-1 text-xs font-semibold text-white/95 drop-shadow-xs flex items-center gap-1">
-                    <span>{{ activeCondition.label }}</span>
-                    <span v-if="previewEffect" class="text-[10px] opacity-75 font-normal">(preview)</span>
+                  <p class="mt-1 text-xs font-semibold text-white/95 drop-shadow-xs">
+                    {{ activeCondition.label }}
                   </p>
                 </div>
               </div>
@@ -784,17 +666,17 @@ onBeforeUnmount(() => {
               <div class="text-right flex flex-col items-end gap-1.5 shrink-0">
                 <div class="inline-flex items-center gap-1.5 rounded-full bg-white/20 border border-white/25 px-3 py-1 text-xs font-semibold backdrop-blur-xs shadow-xs text-white">
                   <Thermometer class="h-3.5 w-3.5 text-white/90" />
-                  <span>Feels {{ Math.round(displayWeather.apparentTemperature) }}°</span>
+                  <span>Feels {{ Math.round(currentWeather.apparentTemperature) }}°</span>
                 </div>
                 <div class="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-white tracking-wide pr-0.5 drop-shadow-xs">
                   <span class="inline-flex items-center gap-0.5 text-white/95">
                     <span class="text-[10px] sm:text-xs font-semibold opacity-75">H:</span>
-                    <span>{{ Math.round(displayWeather.highToday) }}°</span>
+                    <span>{{ Math.round(currentWeather.highToday) }}°</span>
                   </span>
                   <span class="opacity-40">·</span>
                   <span class="inline-flex items-center gap-0.5 text-white/95">
                     <span class="text-[10px] sm:text-xs font-semibold opacity-75">L:</span>
-                    <span>{{ Math.round(displayWeather.lowToday) }}°</span>
+                    <span>{{ Math.round(currentWeather.lowToday) }}°</span>
                   </span>
                 </div>
               </div>
@@ -809,8 +691,8 @@ onBeforeUnmount(() => {
                   <Wind class="h-3.5 w-3.5" />
                 </div>
                 <div class="mt-1">
-                  <p class="text-xs sm:text-sm font-bold leading-tight">{{ Math.round(displayWeather.windSpeed) }} km/h</p>
-                  <p class="text-[10px] text-white/70">{{ displayWeather.windCardinal }}</p>
+                  <p class="text-xs sm:text-sm font-bold leading-tight">{{ Math.round(currentWeather.windSpeed) }} km/h</p>
+                  <p class="text-[10px] text-white/70">{{ currentWeather.windCardinal }}</p>
                 </div>
               </div>
 
@@ -821,7 +703,7 @@ onBeforeUnmount(() => {
                   <Droplets class="h-3.5 w-3.5" />
                 </div>
                 <div class="mt-1">
-                  <p class="text-xs sm:text-sm font-bold leading-tight">{{ Math.round(displayWeather.humidity) }}%</p>
+                  <p class="text-xs sm:text-sm font-bold leading-tight">{{ Math.round(currentWeather.humidity) }}%</p>
                   <p class="text-[10px] text-white/70">Relative</p>
                 </div>
               </div>
@@ -833,8 +715,8 @@ onBeforeUnmount(() => {
                   <CloudRain class="h-3.5 w-3.5" />
                 </div>
                 <div class="mt-1">
-                  <p class="text-xs sm:text-sm font-bold leading-tight">{{ displayWeather.precipitationProbability }}%</p>
-                  <p class="text-[10px] text-white/70">{{ displayWeather.precipitation }} mm</p>
+                  <p class="text-xs sm:text-sm font-bold leading-tight">{{ currentWeather.precipitationProbability }}%</p>
+                  <p class="text-[10px] text-white/70">{{ currentWeather.precipitation }} mm</p>
                 </div>
               </div>
 
@@ -845,8 +727,8 @@ onBeforeUnmount(() => {
                   <Sun class="h-3.5 w-3.5" />
                 </div>
                 <div class="mt-1">
-                  <p class="text-xs sm:text-sm font-bold leading-tight">{{ Math.round(displayWeather.uvIndex) }}</p>
-                  <p class="text-[10px] text-white/70">{{ uvCategory(displayWeather.uvIndex) }}</p>
+                  <p class="text-xs sm:text-sm font-bold leading-tight">{{ Math.round(currentWeather.uvIndex) }}</p>
+                  <p class="text-[10px] text-white/70">{{ uvCategory(currentWeather.uvIndex) }}</p>
                 </div>
               </div>
 
@@ -857,8 +739,8 @@ onBeforeUnmount(() => {
                   <Activity class="h-3.5 w-3.5" />
                 </div>
                 <div class="mt-1">
-                  <p class="text-xs sm:text-sm font-bold leading-tight">{{ displayWeather.aqi?.aqi ?? "--" }}</p>
-                  <p class="text-[10px] text-white/70 truncate">{{ displayWeather.aqi?.category ?? "AQI" }}</p>
+                  <p class="text-xs sm:text-sm font-bold leading-tight">{{ currentWeather.aqi?.aqi ?? "--" }}</p>
+                  <p class="text-[10px] text-white/70 truncate">{{ currentWeather.aqi?.category ?? "AQI" }}</p>
                 </div>
               </div>
 
@@ -869,8 +751,8 @@ onBeforeUnmount(() => {
                   <Sunrise class="h-3.5 w-3.5" />
                 </div>
                 <div class="mt-1">
-                  <p class="text-xs sm:text-sm font-bold leading-tight">{{ displayWeather.sunrise }}</p>
-                  <p class="text-[10px] text-white/70">Set {{ displayWeather.sunset }}</p>
+                  <p class="text-xs sm:text-sm font-bold leading-tight">{{ currentWeather.sunrise }}</p>
+                  <p class="text-[10px] text-white/70">Set {{ currentWeather.sunset }}</p>
                 </div>
               </div>
             </div>

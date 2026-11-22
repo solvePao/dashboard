@@ -39,7 +39,7 @@ const stockConfig = computed(() => {
 const rightPanelItems = computed<PagerItem[]>(() => {
   const items: PagerItem[] = [];
   if (walkieWidget.value) {
-    items.push({ key: "walkie", label: "Caller" });
+    items.push({ key: "walkie", label: "Caller", reserveNavigationSpace: true });
   }
   if (stockConfig.value) {
     items.push({ key: "stock", label: "Stocks" });

@@ -14,11 +14,13 @@ export function liveDeviceUrl(token: string): string {
 }
 
 export async function createDeviceSessionApi(
-  sessionId: string
+  sessionId: string,
+  signal?: AbortSignal
 ): Promise<SessionResponse> {
   return apiClient<SessionResponse>("/api/auth/device/session", {
     method: "POST",
     body: JSON.stringify({ session_id: sessionId }),
+    signal,
   });
 }
 
@@ -45,11 +47,12 @@ export async function disconnectDeviceApi(token: string): Promise<void> {
   });
 }
 
-export async function fetchMeApi(token: string): Promise<MeResponse> {
+export async function fetchMeApi(token: string, signal?: AbortSignal): Promise<MeResponse> {
   return apiClient<MeResponse>("/api/auth/me", {
     headers: {
       Authorization: `Bearer ${token}`,
     },
+    signal,
   });
 }
 

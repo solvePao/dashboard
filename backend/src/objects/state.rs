@@ -1,5 +1,5 @@
 use crate::models::auth::User;
-use crate::models::device::{CheckSessionResponse, PairingState};
+use crate::models::device::{CheckSessionResponse, PairingState, PairingStatus};
 
 /// Pure pairing state machine. The Durable Object handler is a thin
 /// wrapper over these rules so they are unit-testable on any target.
@@ -23,12 +23,12 @@ pub enum AlarmOutcome {
 /// Starts (or refreshes) a pairing. A finished pairing is never reopened.
 pub fn init_pairing(existing: Option<&PairingState>, expires_at: &str) -> PairingState {
     if let Some(pairing) = existing {
-        if pairing.status == "authorized" {
+        if pairing.status == PairingStatus::Authorized {
             return pairing.clone();
         }
     }
     PairingState {
-        status: "pending".to_string(),
+        status: PairingStatus::Pending,
         expires_at: expires_at.to_string(),
         token: None,
         user: None,
@@ -44,36 +44,36 @@ pub fn commit_pairing(
     let Some(pairing) = existing else {
         return CommitOutcome::MissingOrExpired;
     };
-    match pairing.status.as_str() {
-        "authorized" => CommitOutcome::AlreadyAuthorized,
-        "pending" => CommitOutcome::Committed(PairingState {
-            status: "authorized".to_string(),
+    match pairing.status {
+        PairingStatus::Authorized => CommitOutcome::AlreadyAuthorized,
+        PairingStatus::Pending => CommitOutcome::Committed(PairingState {
+            status: PairingStatus::Authorized,
             expires_at: pairing.expires_at.clone(),
             token: Some(token.to_string()),
             user: Some(user.clone()),
         }),
-        _ => CommitOutcome::MissingOrExpired,
+        PairingStatus::Expired => CommitOutcome::MissingOrExpired,
     }
 }
 
 /// Applies the expiry alarm. `None` means the object holds nothing.
 pub fn expire_pairing(existing: Option<&PairingState>) -> Option<AlarmOutcome> {
     let pairing = existing?;
-    match pairing.status.as_str() {
-        "pending" => Some(AlarmOutcome::Expired(PairingState {
-            status: "expired".to_string(),
+    match pairing.status {
+        PairingStatus::Pending => Some(AlarmOutcome::Expired(PairingState {
+            status: PairingStatus::Expired,
             ..pairing.clone()
         })),
-        _ => Some(AlarmOutcome::Wipe),
+        PairingStatus::Authorized | PairingStatus::Expired => Some(AlarmOutcome::Wipe),
     }
 }
 
 /// Public view of a pairing. Token and user are only exposed once
 /// authorized; pending and expired views never leak them.
 pub fn as_check(pairing: &PairingState) -> CheckSessionResponse {
-    let authorized = pairing.status == "authorized";
+    let authorized = pairing.status == PairingStatus::Authorized;
     CheckSessionResponse {
-        status: pairing.status.clone(),
+        status: pairing.status,
         token: if authorized {
             pairing.token.clone()
         } else {

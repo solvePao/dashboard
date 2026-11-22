@@ -9,8 +9,8 @@ defineProps<{
 </script>
 
 <template>
-  <div v-if="members.length" class="flex flex-col items-center gap-1.5" aria-label="Group members">
-    <div class="flex items-center justify-center -space-x-2 py-1">
+  <div v-if="members.length" class="flex w-full flex-col items-center gap-1.5" aria-label="Group members">
+    <div class="flex max-w-full flex-wrap items-center justify-center gap-1.5 py-1">
       <div
         v-for="member in members"
         :key="member.device_id"

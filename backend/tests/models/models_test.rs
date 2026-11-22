@@ -4,7 +4,7 @@ use backend::models::device::{
     AuthorizeDeviceRequest, AuthorizeDeviceResponse, CheckSessionRequest, CheckSessionResponse,
     CreateSessionRequest, CreateSessionResponse, DeviceToken, DevicesResponse, HubEvent,
     HubEventRequest, HubSnapshot, HubState, PairingCode, PairingCommitRequest, PairingInitRequest,
-    PairingState, RevokeResponse,
+    PairingState, PairingStatus, RevokeResponse,
 };
 use backend::models::error::AppError;
 
@@ -83,7 +83,7 @@ fn device_dtos_serde() {
     assert!(serde_json::to_string(&resp).unwrap().contains("ABC123"));
 
     let resp = AuthorizeDeviceResponse {
-        status: "authorized".to_string(),
+        status: PairingStatus::Authorized,
         session_id: "s".to_string(),
         device_name: "Mobile Device".to_string(),
         message: "ok".to_string(),
@@ -110,39 +110,38 @@ fn device_dtos_serde() {
     assert_eq!(back.token, "t");
 
     let state = PairingState {
-        status: "pending".to_string(),
+        status: PairingStatus::Pending,
         expires_at: "e".to_string(),
         token: None,
         user: None,
     };
     let s = serde_json::to_string(&state).unwrap();
     let back: PairingState = serde_json::from_str(&s).unwrap();
-    assert_eq!(back.status, "pending");
+    assert_eq!(back.status, PairingStatus::Pending);
     assert!(!s.contains("token"));
 
     let tok = DeviceToken {
         token: "t".to_string(),
         user_id: 1,
-        device_name: "d".to_string(),
+        device_name: "Mobile Device".to_string(),
         created_at: "c".to_string(),
         expires_at: "e".to_string(),
         last_used_at: None,
     };
     assert!(serde_json::to_string(&DevicesResponse { devices: vec![tok] })
         .unwrap()
-        .contains("Mobile")
-        || true);
+        .contains("Mobile Device"));
 
     // CheckSessionResponse omits None fields.
     let r = CheckSessionResponse {
-        status: "pending".to_string(),
+        status: PairingStatus::Pending,
         token: None,
         user: None,
     };
     let s = serde_json::to_string(&r).unwrap();
     assert!(!s.contains("token"));
     let r2 = CheckSessionResponse {
-        status: "authorized".to_string(),
+        status: PairingStatus::Authorized,
         token: Some("tok".to_string()),
         user: Some(sample_user()),
     };
@@ -153,12 +152,52 @@ fn device_dtos_serde() {
 }
 
 #[test]
+fn pairing_status_contract() {
+    assert_eq!(PairingStatus::Pending.as_str(), "pending");
+    assert_eq!(PairingStatus::Authorized.as_str(), "authorized");
+    assert_eq!(PairingStatus::Expired.as_str(), "expired");
+
+    assert_eq!(format!("{}", PairingStatus::Pending), "pending");
+    assert_eq!(format!("{}", PairingStatus::Authorized), "authorized");
+    assert_eq!(format!("{}", PairingStatus::Expired), "expired");
+
+    assert_eq!(
+        serde_json::to_string(&PairingStatus::Pending).unwrap(),
+        "\"pending\""
+    );
+    assert_eq!(
+        serde_json::to_string(&PairingStatus::Authorized).unwrap(),
+        "\"authorized\""
+    );
+    assert_eq!(
+        serde_json::to_string(&PairingStatus::Expired).unwrap(),
+        "\"expired\""
+    );
+
+    assert_eq!(
+        serde_json::from_str::<PairingStatus>("\"pending\"").unwrap(),
+        PairingStatus::Pending
+    );
+    assert_eq!(
+        serde_json::from_str::<PairingStatus>("\"authorized\"").unwrap(),
+        PairingStatus::Authorized
+    );
+    assert_eq!(
+        serde_json::from_str::<PairingStatus>("\"expired\"").unwrap(),
+        PairingStatus::Expired
+    );
+
+    assert!(serde_json::from_str::<PairingStatus>("\"unknown\"").is_err());
+    assert!(serde_json::from_str::<PairingStatus>("\"Pending\"").is_err());
+}
+
+#[test]
 fn check_session_response_roundtrips_from_object() {
     let r: CheckSessionResponse = serde_json::from_value(serde_json::json!({
         "status": "authorized", "token": "tok", "user": null
     }))
     .unwrap();
-    assert_eq!(r.status, "authorized");
+    assert_eq!(r.status, PairingStatus::Authorized);
     assert_eq!(r.token.as_deref(), Some("tok"));
 }
 

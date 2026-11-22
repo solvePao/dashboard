@@ -8,6 +8,7 @@ use crate::services::{AuthService, DeviceService};
 use crate::utils::{
     allowed_origins, is_origin_allowed, json_error, json_ok, parse_cookie_header, request_origin,
 };
+use crate::walkie::repository::WalkieRepository;
 use super::{get_db, validation};
 
 pub async fn create_session(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -74,22 +75,11 @@ pub async fn authorize_device(mut req: Request, ctx: RouteContext<()>) -> Result
     .await
     {
         Ok(res) => {
-            #[derive(serde::Deserialize)]
-            struct ExistingGroup {
-                id: String,
-            }
-            if let Ok(user_param) = crate::db::helper::user_id_param(user.id) {
-                if let Ok(groups) = crate::walkie::repository::WalkieRepository(&db)
-                    .rows::<ExistingGroup>(
-                        "SELECT id FROM walkie_groups WHERE owner_id=? ORDER BY created_at ASC LIMIT 1",
-                        &[user_param],
-                    )
-                    .await
-                {
-                    if let Some(g) = groups.first() {
-                        let _ = crate::walkie::repository::auto_enroll_account_devices(&db, &ctx.env, user.id, &g.id).await;
-                    }
-                }
+            if let Ok(Some(group_id)) = WalkieRepository(&db).first_owned_group_id(user.id).await {
+                let _ = crate::walkie::repository::auto_enroll_account_devices(
+                    &db, &ctx.env, user.id, &group_id,
+                )
+                .await;
             }
             json_ok(&res)
         }
@@ -328,21 +318,30 @@ pub async fn revoke_device(req: Request, ctx: RouteContext<()>) -> Result<Respon
     // self-disconnect; any other own-device deletion is a revocation.
     let kind = validation::resolve_lifecycle_kind(&auth_token, &token_to_revoke);
 
-    #[derive(serde::Deserialize)]
-    struct GroupAssignment { group_id: String }
-    let assignments = match crate::walkie::repository::WalkieRepository(&db).rows::<GroupAssignment>(
-        "SELECT m.group_id FROM walkie_device_members m JOIN device_tokens t ON t.token=m.token WHERE m.token=? AND t.user_id=?",
-        &[D1Type::Text(&token_to_revoke), match crate::db::helper::user_id_param(user.id) { Ok(v)=>v, Err(_)=>return json_error("Invalid user.",500) }]
-    ).await { Ok(v)=>v, Err(err)=>return err.to_response() };
+    let group_ids = match WalkieRepository(&db)
+        .device_group_ids(user.id, &token_to_revoke)
+        .await
+    {
+        Ok(group_ids) => group_ids,
+        Err(err) => return err.to_response(),
+    };
     // Revoke authorization first. No outstanding ticket can reconnect while teardown runs.
     match DeviceService::revoke_device(&db, &ctx.env, user.id, &token_to_revoke, kind).await {
         Ok(revoked) => {
-            let mut cleanup_pending=false;
-            for assignment in assignments {
-                cleanup_pending |= crate::walkie::repository::invalidate_device(&ctx.env,&assignment.group_id,&token_to_revoke).await;
+            let mut cleanup_pending = false;
+            for group_id in group_ids {
+                cleanup_pending |= crate::walkie::repository::invalidate_device(
+                    &ctx.env,
+                    &group_id,
+                    &token_to_revoke,
+                )
+                .await;
             }
-            Ok(json_ok(&serde_json::json!({"revoked":revoked,"cleanup_pending":cleanup_pending}))?.with_status(if cleanup_pending {202}else{200}))
-        },
+            Ok(
+                json_ok(&serde_json::json!({"revoked":revoked,"cleanup_pending":cleanup_pending}))?
+                    .with_status(if cleanup_pending { 202 } else { 200 }),
+            )
+        }
         Err(err) => err.to_response(),
     }
 }
