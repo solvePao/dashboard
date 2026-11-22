@@ -33,7 +33,7 @@ mobile/
     │
     ├── types/                     # Strongly typed domain models & API contracts
     │   ├── auth.ts                # UserProfile, AuthState, SessionResponse, CheckAuthResponse, MeResponse
-    │   └── layout.ts              # SplitRatio ("50-50" | "30-70" | "70-30")
+    │   └── layout.ts              # SplitRatio, WidgetSide, WidgetKey, WidgetLayout, WIDGET_SIDES
     │
     ├── api/                       # Centralized REST network layer
     │   ├── client.ts              # Typed fetch client with ApiError and JSON handling
@@ -45,34 +45,37 @@ mobile/
     │   ├── weatherApi.ts          # Open-Meteo forecast & air quality client
     │   └── stockApi.ts            # TradingView scanner client with 5m cache & backoff
     │
+    ├── widgets/                   # Mobile dashboard widget registry & strategies
+    │   └── registry.ts            # MOBILE_WIDGET_REGISTRY & resolveDashboardWidgets mapper
+    │
     ├── composables/               # Reactive state controllers
     │   ├── useDeviceAuth.ts       # Pairing lifecycle, token restore, and reactive status
     │   ├── useOrientationLock.ts  # Screen orientation lock and fullscreen management
+    │   ├── useWidgetLayout.ts     # Bidirectional panel placement, reordering & persistence
     │   ├── useWidgets.ts          # Reactive store for device widgets synced via socket
     │   └── useTheme.ts            # Light/Dark/System theme switcher with storage sync
     │
     ├── components/                # Modular UI presentation components
     │   ├── HorizontalSplitLayout.vue # Dual-panel responsive container with configurable split ratio
+    │   ├── DashboardWidgetPanel.vue  # Dynamic host panel mounting active widget in VerticalSlidePager
+    │   ├── WidgetLayoutSettings.vue  # Reorder & cross-panel destination selector with reset layout
     │   ├── VerticalSlidePager.vue # Smooth vertical slide pager with touch, wheel & morphing dots
-    │   ├── DeviceLeftPanel.vue    # Left panel coordinating Weather widget, Clock view & unauthorized pairing instructions
-    │   ├── DevicePairingSteps.vue # 3-step actionable pairing guide with real-time auto-pairing notice and feedback banner
-    │   ├── DeviceLinkedSummary.vue# Active connection summary and 6-month validity badge (housed in settings modal)
-    │   ├── DeviceSettingsModal.vue# Floating settings modal (fullscreen, theme, linked device summary, disconnect, user profile banner)
-    │   ├── DeviceAuthCard.vue     # Right panel coordinating Walkie-talkie & Stock widgets via VerticalSlidePager (up/down swipe)
-    │   ├── DevicePairingView.vue  # SVG QR code display, 6-char code badge, and copy button
+    │   ├── DeviceLeftPanel.vue    # Left panel pairing guide & unlinked status indicators
+    │   ├── DevicePairingSteps.vue # 3-step actionable pairing guide with real-time auto-pairing notice
+    │   ├── DeviceLinkedSummary.vue# Active connection summary and 6-month validity badge
+    │   ├── DeviceSettingsModal.vue# Floating settings modal (widget layout, fullscreen, profile, disconnect)
+    │   ├── DevicePairingView.vue  # SVG QR code display, 6-char code badge, and refresh button
     │   ├── DeviceAuthorizedMinimalView.vue # Multi-mode Clock & synchronization view (Digital, Analog, Calendar)
-    │   ├── DeviceAuthorizedView.vue# Authorized profile avatar, name, email, and connection badges
     │   ├── clock/
     │   │   ├── DigitalClockView.vue  # 12h/24h digital clock with animated colons and date badges
     │   │   ├── AnalogClockView.vue   # SVG analog dial with smooth 60fps sweep / mechanical tick and date window
     │   │   └── MonthCalendarView.vue # Interactive monthly calendar grid with month/year navigation and Today reset
     │   ├── widgets/
-    │   │   ├── WeatherWidget.vue  # Full weather display with multi-city horizontal swipe animation, automatic effects based on the selected city's weather
-    │   │   ├── WeatherEffects.vue # GPU-accelerated atmospheric visual shaders (sunlight, day/night rain, cloud, sandstorm, snow, chilly night)
-    │   │   ├── StockWidget.vue    # Full stock display with live quotes, frontend-configured performance period, clean grid (no topbar), icon-only back button, day range, metrics grid
-    │   │   ├── WalkieTalkieWidget.vue # Compact zero-scroll PTT widget fitting 100% on mobile phone screens
-    │   │   └── WalkiePTTButton.vue    # Compact ~96px touch PTT button with concentric animated ripples
-    │   └── ThemeToggle.vue        # Dropdown / button toggling light, dark, or system mode
+    │   │   ├── WeatherWidget.vue  # Full weather display with multi-city horizontal swipe animation
+    │   │   ├── WeatherEffects.vue # GPU-accelerated atmospheric visual shaders
+    │   │   ├── StockWidget.vue    # Full stock display with live quotes & detail inspection mode
+    │   │   ├── WalkieTalkieWidget.vue # Compact Caller / Walkie-talkie live calling interface
+    │   │   └── CallerWaitingModal.vue # Scoped dialog anchored to the panel hosting the Caller widget
     │
     ├── styles/                    # Decoupled stylesheets
     │   ├── theme.css              # @theme inline tokens, :root and .dark CSS variables
@@ -93,35 +96,41 @@ flowchart TD
     subgraph UIComponents["UI Components Layer (src/components/ & App.vue)"]
         App["App.vue"]
         SplitLayout["HorizontalSplitLayout.vue"]
-        InstrCard["DeviceInstructionsCard.vue"]
-        AuthCard["DeviceAuthCard.vue"]
-        Steps["DevicePairingSteps.vue"]
-        Summary["DeviceLinkedSummary.vue"]
-        PairView["DevicePairingView.vue"]
-        AuthView["DeviceAuthorizedView.vue"]
-        TToggle["ThemeToggle.vue"]
+        LeftPairing["DeviceLeftPanel.vue (unauthed)"]
+        RightPairing["DevicePairingView.vue (unauthed)"]
+        WidgetPanelLeft["DashboardWidgetPanel.vue (left)"]
+        WidgetPanelRight["DashboardWidgetPanel.vue (right)"]
+        SettingsModal["DeviceSettingsModal.vue"]
+        LayoutSettings["WidgetLayoutSettings.vue"]
+        Pager["VerticalSlidePager.vue"]
+        WaitModal["CallerWaitingModal.vue"]
     end
 
     App --> SplitLayout
-    SplitLayout -->|left slot| InstrCard
-    SplitLayout -->|right slot| AuthCard
-    InstrCard --> Steps
-    InstrCard --> Summary
-    InstrCard --> TToggle
-    AuthCard --> PairView
-    AuthCard --> AuthView
+    SplitLayout -->|unauthed left| LeftPairing
+    SplitLayout -->|unauthed right| RightPairing
+    SplitLayout -->|authed left| WidgetPanelLeft
+    SplitLayout -->|authed right| WidgetPanelRight
+    WidgetPanelLeft --> Pager
+    WidgetPanelRight --> Pager
+    App --> SettingsModal
+    SettingsModal --> LayoutSettings
+    App --> WaitModal
 
     subgraph ComposablesLayer["Composables Layer (src/composables/)"]
         useDeviceAuth["useDeviceAuth()"]
         useOrientationLock["useOrientationLock()"]
-        useTheme["useTheme()"]
+        useWidgetLayout["useWidgetLayout()"]
+        useWidgets["useWidgets()"]
+        useWalkieTalkie["useWalkieTalkie()"]
     end
 
     App --> useDeviceAuth
     App --> useOrientationLock
-    InstrCard --> useDeviceAuth
-    AuthCard --> useDeviceAuth
-    TToggle --> useTheme
+    App --> useWidgetLayout
+    App --> useWidgets
+    App --> useWalkieTalkie
+    LayoutSettings --> useWidgetLayout
 
     subgraph ServicesLayer["Services Layer (src/services/)"]
         CryptoService["crypto.ts\n(generateSessionIdHex)"]
@@ -155,7 +164,12 @@ flowchart TD
      - `SessionResponse`: `session_id`, `short_code`, `qr_svg`, `expires_at`.
      - `CheckAuthResponse`: `status`, `token`, `user`.
      - `MeResponse`: `user`.
-   - **`layout.ts`**: `SplitRatio` union (`"50-50" | "30-70" | "70-30"`).
+   - **`layout.ts`**:
+     - `SplitRatio`: `"50-50" | "30-70" | "70-30"`.
+     - `WidgetSide`: `"left" | "right"`.
+     - `WidgetKey`: `"weather" | "clock" | "walkie_talkie" | "stock"`.
+     - `WidgetLayout`: `Record<WidgetSide, WidgetKey[]>`.
+     - `WIDGET_SIDES`: `["left", "right"]`.
 
 2. **`src/api/` (Network Layer)**
    - **`client.ts`**: Centralized HTTP fetch client reading `VITE_API_URL`, applying JSON content type headers, verifying response status, and normalizing errors.
@@ -170,14 +184,17 @@ flowchart TD
 
 4. **`src/composables/` (Reactive Controllers)**
    - **`useDeviceAuth.ts`**: Manages the full pairing lifecycle. Displays the backend's canonical `short_code` (with a local `deriveShortCode` fallback), tracks `authState`, restores saved tokens via `restoreExistingToken` (clears storage only on 401/403; keeps the token and offers retry on network errors), initializes sessions via `createSession`, re-verifies saved tokens first inside `checkAuth`, and cleans up tokens via `disconnect`.
+   - **`useWidgetLayout.ts`**: Controls bidirectional widget placement across left and right panels with localStorage persistence per authenticated user, handles empty panels gracefully, and provides reordering and default layout restoration.
    - **`useOrientationLock.ts`**: Monitors screen orientation and document fullscreen state. Requests `screen.orientation.lock("landscape")` when supported and provides `toggleFullscreen`.
    - **`useTheme.ts`**: Weather-driven adaptive theme controller (`syncWeatherTheme`). Automatically sets Light mode during daytime weather and Dark mode during nighttime or dark severe storms (thunderstorms, duststorms), with a local solar time fallback (6 AM - 6 PM) and zero manual UI toggles.
 
 5. **`src/components/` (UI Presentation Layer)**
    - **`HorizontalSplitLayout.vue`**: Configurable dual-pane layout maintaining responsive width ratios and safe-area padding.
-   - **`DeviceLeftPanel.vue`**: Left pane presenting Weather widget & Clock view if authorized, or a 3-step actionable pairing guide (`DevicePairingSteps`) with live status pill, fullscreen toggle, and real-time auto-pairing indicators if unlinked.
-   - **`DeviceInstructionsCard.vue`**: Legacy left pane showing `DeviceLinkedSummary` if authorized, or `DevicePairingSteps` if unlinked.
-   - **`DeviceAuthCard.vue`**: Right pane displaying `DeviceAuthorizedView` if linked, or `DevicePairingView` showing the QR code (backend SVG rendered through `<img>` so embedded scripts cannot execute), the canonical 6-char pairing code, and a live countdown from `expires_at`. The expired overlay takes precedence over the QR image; error/idle states get their own retry/placeholder blocks.
+   - **`DashboardWidgetPanel.vue`**: Dynamic host panel mounting active widgets into `VerticalSlidePager` with dot variant indicators and stock view mode guards.
+   - **`WidgetLayoutSettings.vue`**: UI inside `DeviceSettingsModal` to move widgets between left and right panels or reorder within a panel, with instant layout reset to default.
+   - **`DeviceLeftPanel.vue`**: Unauthenticated left pane presenting the 3-step actionable pairing guide (`DevicePairingSteps`) with live status pill, fullscreen toggle, and real-time auto-pairing indicators.
+   - **`DevicePairingView.vue`**: Unauthenticated right pane displaying the backend-generated QR code SVG, short pairing code, and session expiry countdown.
+   - **`CallerWaitingModal.vue`**: Call waiting dialog scoped and teleported to whichever panel hosts the Caller widget (`.mo-split-${callerSide}`).
 
 6. **`src/styles/` (Modular Styling)**
    - **`theme.css`**: Tailwind CSS v4 color tokens and dark mode overrides.

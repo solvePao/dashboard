@@ -1,34 +1,94 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Settings } from "@lucide/vue";
+import DashboardWidgetPanel from "./components/DashboardWidgetPanel.vue";
 import HorizontalSplitLayout from "./components/HorizontalSplitLayout.vue";
 import DeviceLeftPanel from "./components/DeviceLeftPanel.vue";
-import DeviceAuthCard from "./components/DeviceAuthCard.vue";
+import DevicePairingView from "./components/DevicePairingView.vue";
 import DeviceSettingsModal from "./components/DeviceSettingsModal.vue";
+import CallerWaitingModal from "./components/widgets/CallerWaitingModal.vue";
 import { useDeviceAuth } from "./composables/useDeviceAuth";
 import { useOrientationLock } from "./composables/useOrientationLock";
-import type { SplitRatio } from "./types/layout";
+import { useWalkieTalkie } from "./composables/useWalkieTalkie";
+import { useWidgetLayout } from "./composables/useWidgetLayout";
+import { useWidgets } from "./composables/useWidgets";
+import { WIDGET_SIDES, type WidgetKey, type WidgetSide } from "./types/layout";
+import { resolveDashboardWidgets } from "./widgets/registry";
 
-const ratio: SplitRatio = "50-50";
-const { isAuthenticated } = useDeviceAuth();
+const { authState, createSession, expiresAt, isAuthenticated, qrSvg, shortCode, user } = useDeviceAuth();
 const { isFullscreen, fullscreenSupported, fullscreenPending, fullscreenError, toggleFullscreen } = useOrientationLock();
-
+const { widgets, refreshWidgets, resetWidgets, startWidgetSync } = useWidgets();
 const showSettingsModal = ref(false);
+
+const userId = computed(() => isAuthenticated.value ? user.value?.id : undefined);
+const availableWidgets = computed(() => resolveDashboardWidgets(widgets.value, userId.value === undefined ? null : user.value));
+const { layout, panels, layoutSaveFailed, moveWidget: saveWidgetMove, resetLayout: resetSavedLayout } = useWidgetLayout(userId, availableWidgets);
+const selected = reactive<Record<WidgetSide, WidgetKey | null>>({ left: null, right: null });
+
+const callerSide = computed(() => WIDGET_SIDES.find((side) => panels.value[side].some((widget) => widget.key === "walkie_talkie")));
+const callerGroup = computed(() => {
+  const widget = widgets.value.find((item) => item.widget_key === "walkie_talkie" && item.enabled);
+  return typeof widget?.config.group_id === "string" ? widget.config.group_id : null;
+});
+const caller = useWalkieTalkie(callerGroup, computed(() => callerSide.value !== undefined));
+
+watch(userId, (id) => {
+  selected.left = null;
+  selected.right = null;
+  showSettingsModal.value = false;
+  resetWidgets();
+  if (id !== undefined) void refreshWidgets();
+}, { immediate: true });
+
+watch(panels, (next) => {
+  for (const side of WIDGET_SIDES) {
+    if (!next[side].some((widget) => widget.key === selected[side])) selected[side] = null;
+  }
+});
+
+watch(caller.incomingSequence, () => {
+  if (callerSide.value) selected[callerSide.value] = "walkie_talkie";
+});
+
+onMounted(() => { startWidgetSync(); });
+
+function moveWidget(key: WidgetKey, side: WidgetSide, index: number): void {
+  const source = saveWidgetMove(key, side, index);
+  if (source) {
+    if (source !== side) selected[source] = null;
+    selected[side] = key;
+  }
+}
+
+function resetLayout(): void {
+  resetSavedLayout();
+  selected.left = null;
+  selected.right = null;
+}
 </script>
 
 <template>
   <div class="mo-app-root orientation-locked-container bg-background text-foreground relative">
-    <HorizontalSplitLayout :ratio="ratio">
-      <!-- Left Box -->
+    <HorizontalSplitLayout>
       <template #left>
-        <DeviceLeftPanel />
+        <DashboardWidgetPanel v-if="isAuthenticated" :key="layout.left.join(',')" v-model="selected.left" :widgets="panels.left" />
+        <DeviceLeftPanel v-else />
       </template>
 
-      <!-- Right Box -->
       <template #right>
-        <DeviceAuthCard />
+        <DashboardWidgetPanel v-if="isAuthenticated" :key="layout.right.join(',')" v-model="selected.right" :widgets="panels.right" />
+        <DevicePairingView
+          v-else
+          :auth-state="authState"
+          :qr-svg="qrSvg"
+          :short-code="shortCode"
+          :expires-at="expiresAt"
+          @refresh="createSession"
+        />
       </template>
     </HorizontalSplitLayout>
+
+    <CallerWaitingModal v-if="callerSide" :target="`.mo-split-${callerSide}`" />
 
     <!-- Floating Settings Button (Bottom Left) -->
     <button
@@ -49,6 +109,10 @@ const showSettingsModal = ref(false);
       :fullscreen-supported="fullscreenSupported"
       :fullscreen-pending="fullscreenPending"
       :fullscreen-error="fullscreenError"
+      :widget-panels="panels"
+      :layout-save-failed="layoutSaveFailed"
+      @move-widget="moveWidget"
+      @reset-layout="resetLayout"
       @toggle-fullscreen="toggleFullscreen"
       @close="showSettingsModal = false"
     />

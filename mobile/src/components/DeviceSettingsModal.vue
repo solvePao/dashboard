@@ -2,7 +2,10 @@
 import { onBeforeUnmount, watch } from "vue";
 import { Loader2, LogOut, Maximize, Minimize, Moon, Settings, X } from "@lucide/vue";
 import DeviceLinkedSummary from "./DeviceLinkedSummary.vue";
+import WidgetLayoutSettings from "./WidgetLayoutSettings.vue";
 import { useDeviceAuth } from "../composables/useDeviceAuth";
+import type { WidgetKey, WidgetSide } from "../types/layout";
+import type { DashboardWidgetPanels } from "../widgets/registry";
 
 const props = defineProps<{
   open: boolean;
@@ -10,11 +13,15 @@ const props = defineProps<{
   fullscreenSupported: boolean;
   fullscreenPending: boolean;
   fullscreenError: string | null;
+  widgetPanels: DashboardWidgetPanels;
+  layoutSaveFailed: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: "close"): void;
   (e: "toggle-fullscreen"): void;
+  (e: "move-widget", key: WidgetKey, side: WidgetSide, index: number): void;
+  (e: "reset-layout"): void;
 }>();
 
 const {
@@ -117,6 +124,13 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
+        <WidgetLayoutSettings
+          :panels="widgetPanels"
+          :save-failed="layoutSaveFailed"
+          @move="(key, side, index) => emit('move-widget', key, side, index)"
+          @reset="emit('reset-layout')"
+        />
+
         <div class="rounded-xl border border-border/70 bg-muted/20 p-3.5">
           <button
             type="button"
@@ -207,4 +221,3 @@ onBeforeUnmount(() => {
   scrollbar-gutter: stable;
 }
 </style>
-
