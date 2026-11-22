@@ -78,55 +78,96 @@ function prev(): void {
 }
 
 // Gesture Handling
-let touchStartX = 0;
-let touchStartY = 0;
+let touchGesture: {
+  x: number;
+  y: number;
+  scrollArea: HTMLElement | null;
+  owner: "content" | "pager" | null;
+} | null = null;
 const SWIPE_THRESHOLD = 30; // Minimum vertical distance in px to trigger page switch
 const WHEEL_THRESHOLD = 18; // Minimum wheel delta to trigger page switch
+// A pause separates wheel sequences because wheel events have no end event.
+const WHEEL_SEQUENCE_GAP_MS = 180;
+let contentWheelUntil = 0;
+
+function getScrollArea(target: EventTarget | null): HTMLElement | null {
+  return target instanceof Element ? target.closest<HTMLElement>("[data-pager-scroll-area]") : null;
+}
+
+function canScroll(area: HTMLElement, deltaY: number): boolean {
+  // scrollTop can be fractional, while scrollHeight and clientHeight are rounded.
+  const maxScrollTop = area.scrollHeight - area.clientHeight;
+  return deltaY < 0 ? area.scrollTop > 1 : area.scrollTop < maxScrollTop - 1;
+}
 
 function onTouchStart(e: TouchEvent): void {
-  if (e.touches.length > 0) {
-    touchStartX = e.touches[0].clientX;
-    touchStartY = e.touches[0].clientY;
+  const touch = e.touches[0];
+  touchGesture = e.touches.length === 1
+    ? { x: touch.clientX, y: touch.clientY, scrollArea: getScrollArea(e.target), owner: null }
+    : null;
+}
+
+function clearTouchGesture(): void {
+  touchGesture = null;
+}
+
+function getSwipeDelta(touch: Touch, start: { x: number; y: number }): { x: number; y: number } {
+  const x = touch.clientX - start.x;
+  const y = touch.clientY - start.y;
+
+  // The portrait orientation lock rotates the dashboard 90 degrees.
+  return isPortrait.value ? { x: y, y: -x } : { x, y };
+}
+
+function onTouchMove(e: TouchEvent): void {
+  const gesture = touchGesture;
+  if (!gesture?.scrollArea || e.touches.length !== 1) return;
+
+  if (!gesture.owner) {
+    const { x, y } = getSwipeDelta(e.touches[0], gesture);
+    if (x === 0 && y === 0) return;
+
+    gesture.owner = Math.abs(x) >= Math.abs(y) || canScroll(gesture.scrollArea, -y)
+      ? "content"
+      : "pager";
+  }
+
+  // Claim an edge swipe before the browser takes over the touch sequence.
+  if (gesture.owner === "pager" && props.enabled && props.items.length > 1 && e.cancelable) {
+    e.preventDefault();
   }
 }
 
 function onTouchEnd(e: TouchEvent): void {
-  if (
-    e.changedTouches.length === 0 ||
-    isAnimating.value ||
-    !props.enabled ||
-    props.items.length <= 1
-  ) {
-    return;
-  }
+  const gesture = touchGesture;
+  clearTouchGesture();
+  if (!gesture || gesture.owner === "content" || !e.changedTouches.length || isAnimating.value) return;
 
-  const rawDeltaX = e.changedTouches[0].clientX - touchStartX;
-  const rawDeltaY = e.changedTouches[0].clientY - touchStartY;
+  const { x, y } = getSwipeDelta(e.changedTouches[0], gesture);
+  if (Math.abs(y) <= Math.abs(x) || Math.abs(y) < SWIPE_THRESHOLD) return;
+  if (!gesture.owner && gesture.scrollArea && canScroll(gesture.scrollArea, -y)) return;
 
-  // Account for CSS rotate(90deg) when portrait orientation lock is active:
-  // In rotated mode, visual Y delta corresponds to -rawDeltaX and visual X to rawDeltaY.
-  const visualDeltaY = isPortrait.value ? -rawDeltaX : rawDeltaY;
-  const visualDeltaX = isPortrait.value ? rawDeltaY : rawDeltaX;
-
-  // Verify swipe is primarily vertical along the panel's visual axis
-  if (
-    Math.abs(visualDeltaY) > Math.abs(visualDeltaX) &&
-    Math.abs(visualDeltaY) >= SWIPE_THRESHOLD
-  ) {
-    if (visualDeltaY < 0) {
-      // Swiped UP -> advance to next slide
-      next();
-    } else {
-      // Swiped DOWN -> return to previous slide
-      prev();
-    }
-  }
+  if (y < 0) next();
+  else prev();
 }
 
 let wheelCooldown = false;
 let wheelCooldownTimer: ReturnType<typeof setTimeout> | undefined;
 
 function onWheel(e: WheelEvent): void {
+  const now = performance.now();
+  if (now < contentWheelUntil) {
+    contentWheelUntil = now + WHEEL_SEQUENCE_GAP_MS;
+    return;
+  }
+
+  const scrollArea = getScrollArea(e.target);
+  if (scrollArea && (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY))) return;
+  if (scrollArea && e.deltaY !== 0 && canScroll(scrollArea, e.deltaY)) {
+    contentWheelUntil = now + WHEEL_SEQUENCE_GAP_MS;
+    return;
+  }
+
   if (wheelCooldown || isAnimating.value || !props.enabled || props.items.length <= 1) {
     return;
   }
@@ -177,7 +218,9 @@ onBeforeUnmount(() => {
   <div
     class="mo-pager-root relative flex h-full w-full flex-col overflow-hidden select-none"
     @touchstart.passive="onTouchStart"
+    @touchmove="onTouchMove"
     @touchend.passive="onTouchEnd"
+    @touchcancel.passive="clearTouchGesture"
     @wheel="onWheel"
   >
     <div class="relative min-h-0 flex-1 w-full overflow-hidden">
