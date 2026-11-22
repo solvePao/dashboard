@@ -41,11 +41,8 @@ function endForEveryone(): void {
     <div
       class="caller-stage min-h-0 flex-1"
       :class="{ 'caller-stage--with-actions': inLiveCall || featuredCall }"
-      @touchstart.stop
-      @touchend.stop
-      @wheel.stop
     >
-      <div class="min-h-0 min-w-0 overflow-y-auto overscroll-contain">
+      <div data-pager-scroll-area class="min-h-0 min-w-0 overflow-y-auto overscroll-contain">
         <div class="caller-body mx-auto flex min-h-full w-full max-w-md flex-col gap-3 px-4 py-3">
           <p v-if="busyElsewhere" role="status" class="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs">This device is already on a call in another tab.</p>
           <div v-if="activityError || state.status === 'error'" role="alert" class="rounded-2xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">{{ activityError || state.message }}</div>
