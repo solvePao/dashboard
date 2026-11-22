@@ -26,7 +26,7 @@ use worker::*;
 #[cfg(not(any(test, coverage)))]
 #[cfg(not(test))]
 #[event(fetch)]
-async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
+async fn main(req: Request, env: Env, context: Context) -> Result<Response> {
     let allowed = allowed_origins(&env);
     let origin = request_origin(&req);
 
@@ -34,16 +34,17 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         return cors_preflight(origin.as_deref(), &allowed);
     }
 
+    let context = &context;
     let res = Router::new()
         // Auth & User routes
         .post_async("/api/auth/google", |req, ctx| async move {
             routes::auth::google_auth(req, ctx).await
         })
-        .get_async("/api/users/:sub", |req, ctx| async move {
-            routes::auth::get_user(req, ctx).await
+        .get_async("/api/users/:sub", move |req, ctx| async move {
+            routes::auth::get_user(req, ctx, context).await
         })
-        .get_async("/api/auth/me", |req, ctx| async move {
-            routes::auth::get_me(req, ctx).await
+        .get_async("/api/auth/me", move |req, ctx| async move {
+            routes::auth::get_me(req, ctx, context).await
         })
         .post_async("/api/auth/logout", |req, ctx| async move {
             routes::auth::logout(req, ctx).await
@@ -67,8 +68,8 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/api/devices", |req, ctx| async move {
             routes::device::get_devices(req, ctx).await
         })
-        .get_async("/api/live/device/:token", |req, ctx| async move {
-            routes::device::live_device(req, ctx).await
+        .get_async("/api/live/device/:token", move |req, ctx| async move {
+            routes::device::live_device(req, ctx, context).await
         })
         .delete_async("/api/devices/:token", |req, ctx| async move {
             routes::device::revoke_device(req, ctx).await

@@ -32,13 +32,26 @@ impl PairingObject {
     async fn broadcast(&self, payload: &CheckSessionResponse) {
         // Delivered on the client's single gateway socket, channel `pairing`.
         if let Ok(value) = serde_json::to_value(payload) {
-            if let Ok(Some(name)) = self.state.storage().get::<String>("gateway_name").await {
+            let name = match self.state.id().name() {
+                Some(session) => Some(crate::common::gateway_pairing_name(&session)),
+                None => self
+                    .state
+                    .storage()
+                    .get::<String>("gateway_name")
+                    .await
+                    .ok()
+                    .flatten(),
+            };
+            if let Some(name) = name {
                 super::gateway::deliver_to_gateway(&self.env, &name, "pairing", None, &value).await;
             }
         }
     }
 
     async fn remember_gateway(&self, req: &Request) {
+        if self.state.id().name().is_some() {
+            return;
+        }
         if let Ok(Some(session)) = req.headers().get("x-session-id") {
             let _ = self.state.storage().put("gateway_name", crate::common::gateway_pairing_name(&session)).await;
         }

@@ -1,21 +1,10 @@
 use super::{repository::WalkieRepository, *};
+use futures_util::stream::{self, StreamExt};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 pub async fn handle(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     match dispatch(req, ctx).await {
-        Ok(mut r) if r.status_code() != 101 => {
-            // Responses fetched from a Durable Object have immutable headers.
-            // Rebuild ordinary responses before the router attaches CORS headers.
-            let status = r.status_code();
-            let content_type = r
-                .headers()
-                .get("Content-Type")?
-                .unwrap_or_else(|| "application/json".into());
-            let fresh = Response::from_bytes(r.bytes().await?)?.with_status(status);
-            fresh.headers().set("Content-Type", &content_type)?;
-            Ok(fresh)
-        }
         Ok(r) => Ok(r),
         Err(e) => e.to_response(),
     }
@@ -88,7 +77,9 @@ async fn dispatch(mut req: Request, ctx: RouteContext<()>) -> AppResult<Response
             .get("group_id")
             .and_then(Value::as_str)
             .unwrap_or(&assigned.id);
-        repo.device_member(group_id, &token).await?;
+        if group_id != assigned.id {
+            repo.device_member(group_id, &token).await?;
+        }
         let alerted = super::repository::wake_group_devices(&ctx.env, &db, group_id, Some(&token)).await?;
         return Response::from_json(&json!({"ok": true, "alerted": alerted})).map_err(db_error);
     }
@@ -108,7 +99,7 @@ async fn dispatch(mut req: Request, ctx: RouteContext<()>) -> AppResult<Response
         return super::room_call(&ctx.env, &group.id, "/media",
             &json!({"token":token,"user_id":uid,"group_id":group.id,"body":body})).await;
     }
-    if path.ends_with("/connect") || path.ends_with("/media") || path.ends_with("/availability") {
+    if path.ends_with("/connect") || path.ends_with("/availability") {
         let (assigned, uid) = repo.device_group(&token).await?;
         if path.ends_with("/availability") {
             if ctx.env.var("WALKIE_SFU_APP_ID").is_err()
@@ -127,11 +118,7 @@ async fn dispatch(mut req: Request, ctx: RouteContext<()>) -> AppResult<Response
         return super::room_call(
             &ctx.env,
             &assigned.id,
-            if path.ends_with("/connect") {
-                "/ticket"
-            } else {
-                "/media"
-            },
+            "/ticket",
             &json!({"token":token,"user_id":uid,"group_id":assigned.id,"body":body}),
         )
         .await;
@@ -143,9 +130,8 @@ async fn dispatch(mut req: Request, ctx: RouteContext<()>) -> AppResult<Response
             .ok_or_else(|| AppError::unauthorized("Device authorization expired."))?;
         if path.ends_with("/memberships") {
             // Only this phone's memberships, never all groups owned by its account.
-            let mut groups = repo.groups(uid, &token).await?;
-            groups.retain(|g| g.joined);
-            let device_id = repo.public_id(&token).await?;
+            let (groups, device_id) =
+                futures_util::try_join!(repo.groups(uid, &token, true), repo.public_id(&token),)?;
             return Response::from_json(&json!({"groups":groups,"device_id":device_id}))
                 .map_err(db_error);
         }
@@ -220,22 +206,30 @@ async fn dispatch(mut req: Request, ctx: RouteContext<()>) -> AppResult<Response
             .map(|(_, v)| v.into_owned())
             .unwrap_or_default();
         let device_id = repo.owned_device(&selected, uid).await?;
-        let mut groups = repo.groups(uid, &selected).await?;
-        for g in &mut groups {
-            if let Ok(mut response) = room_call(&ctx.env, &g.id, "/presence", &json!({})).await {
-                if let Ok(clients) = response.json::<Vec<Value>>().await {
-                    for member in &mut g.members {
-                        member.online = clients
-                            .iter()
-                            .any(|c| c["device_id"].as_str() == Some(&member.device_id));
-                        member.audio_active = clients.iter().any(|c| {
-                            c["device_id"].as_str() == Some(&member.device_id)
-                                && c["published"] == true
-                        });
+        let groups = repo.groups(uid, &selected, false).await?;
+        let env = &ctx.env;
+        let groups: Vec<_> = stream::iter(groups)
+            .map(|mut group| async move {
+                if let Ok(mut response) = room_call(env, &group.id, "/presence", &json!({})).await {
+                    if let Ok(clients) = response.json::<Vec<Value>>().await {
+                        for member in &mut group.members {
+                            let device_id = member.device_id.as_str();
+                            let mut matching = clients
+                                .iter()
+                                .filter(|client| client["device_id"].as_str() == Some(device_id));
+                            if let Some(first) = matching.next() {
+                                member.online = true;
+                                member.audio_active = first["published"] == true
+                                    || matching.any(|client| client["published"] == true);
+                            }
+                        }
                     }
                 }
-            }
-        }
+                group
+            })
+            .buffered(5)
+            .collect()
+            .await;
         return Response::from_json(&json!({"groups":groups,"user_id":uid,"device_id":device_id}))
             .map_err(db_error);
     }

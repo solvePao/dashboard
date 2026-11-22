@@ -1,8 +1,9 @@
 mod media;
 
 use super::{repository::WalkieRepository, sfu::SfuService, *};
+use futures_util::future::join_all;
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -100,16 +101,31 @@ impl WalkieGroupObject {
 
     async fn save(&self, room: &Room) -> Result<()> {
         self.state.storage().put("room", room).await?;
+        self.schedule_alarm(room).await
+    }
+
+    async fn schedule_alarm(&self, room: &Room) -> Result<()> {
+        let storage = self.state.storage();
+        let existing = storage.get_alarm().await?;
         if !room.clients.is_empty() || !room.cleanup.is_empty()
             || room.cleanup_in_flight.is_some() || !room.tickets.is_empty() || room.call.is_some()
         {
             let cleanup_delay = if room.cleanup.is_empty() || room.cleanup_in_flight.is_some() { 15_000 } else { 1000 };
-            let delay = room.call.as_ref().filter(|c| !c.established)
-                .map(|c| c.ringing_until.saturating_sub(now()).max(1).min(cleanup_delay))
-                .unwrap_or(cleanup_delay);
-            self.state.storage().set_alarm(Duration::from_millis(delay)).await?;
-        } else {
-            let _ = self.state.storage().delete_alarm().await;
+            let current = now();
+            let deadline = room
+                .call
+                .as_ref()
+                .filter(|c| !c.established)
+                .map(|c| c.ringing_until.min(current + cleanup_delay))
+                .unwrap_or(current + cleanup_delay);
+            // Active traffic must not postpone revocation and expiration checks.
+            if existing.is_none_or(|time| time as u64 > deadline) {
+                storage
+                    .set_alarm(Duration::from_millis(deadline.saturating_sub(now()).max(1)))
+                    .await?;
+            }
+        } else if existing.is_some() {
+            storage.delete_alarm().await?;
         }
         Ok(())
     }
@@ -128,10 +144,6 @@ impl WalkieGroupObject {
         }
     }
 
-    async fn send(&self, room: &Room, id: &str, value: &Value) {
-        self.deliver(room, id, value).await;
-    }
-
     fn call_json(room: &Room) -> Value {
         match &room.call {
             Some(c) => json!({"call_id": c.call_id, "started_by": c.started_by, "participants": c.participants, "started_at": c.started_at, "ringing_until": c.ringing_until, "established": c.established, "declined": c.declined}),
@@ -140,9 +152,19 @@ impl WalkieGroupObject {
     }
 
     async fn broadcast(&self, room: &Room) -> Result<()> {
+        let tokens: BTreeSet<_> = room
+            .clients
+            .values()
+            .map(|client| client.token.as_str())
+            .collect();
+        if tokens.is_empty() {
+            return Ok(());
+        }
         let db = self.env.d1("dashboard")?;
         let repo = WalkieRepository(&db);
-        let mut members = repo.members(&room.group_id).await.unwrap_or_default();
+        let (members, group) =
+            futures_util::join!(repo.members(&room.group_id), repo.group(&room.group_id));
+        let mut members = members.unwrap_or_default();
         for member in &mut members {
             member.online = room
                 .clients
@@ -153,66 +175,49 @@ impl WalkieGroupObject {
                 .values()
                 .any(|c| c.device_id == member.device_id && c.published);
         }
-        let name = if let Some(c) = room.clients.values().next() {
-            repo.member(&room.group_id, &c.token)
-                .await
-                .ok()
-                .map(|g| g.name)
-        } else {
-            None
-        };
+        let name = group.ok().map(|group| group.name);
         let value = json!({"type":"snapshot","group_name":name,"members":members,
             "clients":room.clients.iter().filter(|(_,c)|!c.observe).map(|(id,c)| json!({"connection_id":id,"device_id":c.device_id,"user_id":c.user_id,"name":c.first_name,"first_name":c.first_name,"picture_url":c.picture_url,"device_name":c.device_name,"published":c.published})).collect::<Vec<_>>(),
             "call": Self::call_json(room)});
-        // One delivery per distinct device gateway (mux socket), not per socket.
-        let mut tokens: Vec<String> = Vec::new();
-        for c in room.clients.values() { if !tokens.contains(&c.token) { tokens.push(c.token.clone()); } }
-        for token in tokens {
-            crate::objects::gateway::deliver_to_gateway(&self.env, &crate::common::gateway_device_name(&token), "walkie", Some(&room.group_id), &value).await;
-        }
+        join_all(tokens.into_iter().map(|token| {
+            let value = &value;
+            async move {
+                crate::objects::gateway::deliver_to_gateway(
+                    &self.env,
+                    &crate::common::gateway_device_name(token),
+                    "walkie",
+                    Some(&room.group_id),
+                    value,
+                )
+                .await;
+            }
+        }))
+        .await;
         Ok(())
     }
 
     async fn remove(&self, room: &mut Room, id: &str, reason: &str) {
         // Capture delivery target before the client leaves the room.
         let target_token = room.clients.get(id).map(|c| c.token.clone());
-        if let Some(client) = room.clients.remove(id) {
-            room.cleanup.extend(client.sessions);
-        }
-        for c in room.clients.values_mut() {
-            let mut kept = Vec::new();
-            for session in std::mem::take(&mut c.sessions) {
-                if session.target.as_deref() == Some(id) {
-                    room.cleanup.push(session);
-                } else {
-                    kept.push(session);
-                }
-            }
-            c.sessions = kept;
-        }
-        Self::leave_participant(room, id);
+        Self::remove_client(room, id);
         if let Some(token) = target_token {
             crate::objects::gateway::deliver_to_gateway(&self.env, &crate::common::gateway_device_name(&token), "walkie", Some(&room.group_id), &json!({"type":"ended","connection_id":id,"reason":reason})).await;
         }
     }
 
-    /// Silent removal for client-initiated unsubscribe (no `ended` echo).
-    async fn remove_silent(&self, room: &mut Room, id: &str) {
+    fn remove_client(room: &mut Room, id: &str) {
         if let Some(client) = room.clients.remove(id) {
             room.cleanup.extend(client.sessions);
-        }
-        for c in room.clients.values_mut() {
-            let mut kept = Vec::new();
-            for session in std::mem::take(&mut c.sessions) {
-                if session.target.as_deref() == Some(id) { room.cleanup.push(session); } else { kept.push(session); }
-            }
-            c.sessions = kept;
         }
         Self::leave_participant(room, id);
     }
 
-    async fn prune_state(&self, room: &mut Room) -> Result<()> {
-        room.tickets.retain(|_, t| t.expires_at > now());
+    async fn prune_state(&self, room: &mut Room) -> Result<bool> {
+        let current = now();
+        room.tickets.retain(|_, t| t.expires_at > current);
+        if room.clients.is_empty() && room.call.is_none() {
+            return Ok(false);
+        }
         let db = self.env.d1("dashboard")?;
         let repo = WalkieRepository(&db);
         #[derive(Deserialize)]
@@ -233,10 +238,11 @@ impl WalkieGroupObject {
                     entry.token == client.token
                         && entry.user_id == client.user_id
                 }) || client.device_id.is_empty()
-                    || client.last_seen + 45_000 < now()
+                    || client.last_seen + 45_000 < current
             })
             .map(|(id, _)| id.clone())
             .collect();
+        let mut changed = !removed.is_empty();
         for id in removed {
             self.remove(
                 room,
@@ -245,23 +251,38 @@ impl WalkieGroupObject {
             )
             .await;
         }
-        if room.call.as_ref().is_some_and(|c| !c.established && c.ringing_until <= now()) {
+        if room
+            .call
+            .as_ref()
+            .is_some_and(|c| !c.established && c.ringing_until <= current)
+        {
             Self::end_call(room);
+            changed = true;
         }
-        Ok(())
+        Ok(changed)
     }
 
-    async fn prune(&self, room: &mut Room) -> Result<()> {
-        self.prune_state(room).await?;
-        self.save(room).await
+    async fn refresh_presence(&self, room: &mut Room, from_alarm: bool) -> Result<()> {
+        let ticket_count = room.tickets.len();
+        let changed = self.prune_state(room).await?;
+        if changed || ticket_count != room.tickets.len() {
+            self.save(room).await?;
+        } else if from_alarm {
+            self.schedule_alarm(room).await?;
+        }
+        // Periodic snapshots also recover missed gateway deliveries and refresh roster metadata.
+        if changed || from_alarm {
+            self.broadcast(room).await?;
+        }
+        Ok(())
     }
 
     async fn fetch_inner(&self, mut req: Request) -> Result<Response> {
         let body: Value = req.json().await?;
         let mut room = self.load().await?;
-        if req.path() == "/presence" {
-            self.prune(&mut room).await?;
-            self.broadcast(&room).await?;
+        let path = req.path();
+        if path == "/presence" {
+            self.refresh_presence(&mut room, false).await?;
             return Response::from_json(
                 &room
                     .clients
@@ -270,7 +291,7 @@ impl WalkieGroupObject {
                     .collect::<Vec<_>>(),
             );
         }
-        if req.path() == "/invalidate" {
+        if path == "/invalidate" {
             let ids: Vec<String> = room
                 .clients
                 .iter()
@@ -285,57 +306,125 @@ impl WalkieGroupObject {
                 self.remove(&mut room, &id, "Group or device configuration changed.").await;
             }
             self.prune_state(&mut room).await?;
-            self.broadcast(&room).await?;
             self.save(&room).await?;
+            self.broadcast(&room).await?;
             return Ok(Response::from_json(
                 &json!({"ok":true,"cleanup_pending":!room.cleanup.is_empty() || room.cleanup_in_flight.is_some()}),
             )?
             .with_status(if room.cleanup.is_empty() && room.cleanup_in_flight.is_none() { 200 } else { 202 }));
         }
         let token = body.get("token").and_then(Value::as_str).unwrap_or("");
+        let connection = body
+            .get("connection_id")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let message = body.get("message").unwrap_or(&Value::Null);
+        let requested = body
+            .get("group_id")
+            .and_then(Value::as_str)
+            .unwrap_or(&room.group_id);
+        if !room.group_id.is_empty() && room.group_id != requested {
+            return Response::error("Invalid group", 403);
+        }
+
+        // The gateway can only renew or remove connections it already owns.
+        // The room alarm revalidates device access even while heartbeats arrive.
+        if path == "/gateway-signal"
+            && message.get("type").and_then(Value::as_str) == Some("heartbeat")
+        {
+            let Some(client) = room
+                .clients
+                .get_mut(connection)
+                .filter(|client| client.token == token)
+            else {
+                return Response::error("Audio session ended", 403);
+            };
+            client.last_seen = now();
+            self.save(&room).await?;
+            return Response::from_json(&json!({"ok":true}));
+        }
+        if path == "/gateway-leave" {
+            if !room
+                .clients
+                .get(connection)
+                .is_some_and(|client| client.token == token)
+            {
+                return Response::error("Audio session ended", 403);
+            }
+            Self::remove_client(&mut room, connection);
+            self.save(&room).await?;
+            self.broadcast(&room).await?;
+            return Response::from_json(&json!({"ok":true}));
+        }
+
+        // These private routes are reached only after the public Worker has
+        // checked the token, widget, and membership for this group.
+        if path == "/call-state" {
+            self.refresh_presence(&mut room, false).await?;
+            return Response::from_json(&json!({"call":Self::call_json(&room)}));
+        }
+        if path == "/media" {
+            let data = body.get("body").unwrap_or(&Value::Null);
+            let connection = data
+                .get("connection_id")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if !room
+                .clients
+                .get(connection)
+                .is_some_and(|client| client.token == token && !client.observe)
+            {
+                return Response::error("Audio session ended", 403);
+            }
+            return match self.media(&mut room, connection, data).await {
+                Ok(value) => Response::from_json(&value),
+                Err(error) => error.to_response(),
+            };
+        }
+
         let db = self.env.d1("dashboard")?;
         let observe = body
             .get("observe")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let requested = body.get("group_id").and_then(Value::as_str).unwrap_or(&room.group_id);
         let repo = WalkieRepository(&db);
         let access = repo.device_member(requested, token).await;
-        let (group, _uid) = match access {
+        let (group, uid) = match access {
             Ok(v) => v,
             Err(e) => return e.to_response(),
         };
-        if !room.group_id.is_empty() && room.group_id != group.id {
-            return Response::error("Invalid group", 403);
-        }
         room.group_id = group.id.clone();
-        if req.path() == "/call-state" {
-            self.prune(&mut room).await?;
-            self.broadcast(&room).await?;
-            return Response::from_json(&json!({"call":Self::call_json(&room)}));
-        }
-        if req.path() == "/gateway-join" {
+        if path == "/gateway-join" {
             if body.get("protocol_version").and_then(Value::as_u64) != Some(2) {
                 return Response::error("Refresh this page to use Caller.", 409);
             }
-            return self.gateway_join(&mut room, token, observe, &group).await;
+            return self
+                .gateway_join(&mut room, token, uid, observe, &group, &repo)
+                .await;
         }
-        if req.path() == "/gateway-leave" || req.path() == "/gateway-signal" {
-            let connection = body.get("connection_id").and_then(Value::as_str).unwrap_or("");
-            if !room.clients.get(connection).is_some_and(|c| c.token == token) {
+        if path == "/gateway-signal" {
+            let Some(client) = room
+                .clients
+                .get_mut(connection)
+                .filter(|client| client.token == token)
+            else {
                 return Response::error("Audio session ended", 403);
-            }
-            if req.path() == "/gateway-leave" {
-                self.remove_silent(&mut room, connection).await;
-            } else {
-                let data = body.get("message").cloned().unwrap_or(json!({}));
-                self.signal(&mut room, connection, &data).await?;
-            }
-            self.broadcast(&room).await?;
+            };
+            client.last_seen = now();
+            let pruned = self.prune_state(&mut room).await?;
+            let reply = Self::signal(&mut room, connection, message)?;
             self.save(&room).await?;
+            let mut changed = pruned;
+            if let Some(reply) = reply {
+                changed |= reply["type"] != "error";
+                self.deliver(&room, connection, &reply).await;
+            }
+            if changed {
+                self.broadcast(&room).await?;
+            }
             return Response::from_json(&json!({"ok":true}));
         }
-        if req.path() == "/ticket" {
+        if path == "/ticket" {
             if !observe
                 && (self.env.var("WALKIE_SFU_APP_ID").is_err()
                     || self.env.secret("WALKIE_SFU_APP_SECRET").is_err())
@@ -345,7 +434,6 @@ impl WalkieGroupObject {
                 )
                 .to_response();
             }
-            let repo = WalkieRepository(&db);
             if let Err(e) = repo.rate_limit(&format!("connect:{}", token), 120).await {
                 return e.to_response();
             }
@@ -370,44 +458,32 @@ impl WalkieGroupObject {
                 &json!({"ticket":ticket,"group_id":group.id,"group_name":group.name}),
             );
         }
-        if req.path() == "/media" {
-            let data = body.get("body").cloned().unwrap_or(json!({}));
-            let connection = data
-                .get("connection_id")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if !room
-                .clients
-                .get(connection)
-                .is_some_and(|c| c.token == token && !c.observe)
-            {
-                return Response::error("Audio session ended", 403);
-            }
-            let result = self.media(&mut room, connection, &data).await;
-            return match result {
-                Ok(v) => Response::from_json(&v),
-                Err(e) => e.to_response(),
-            };
-        }
         Response::error("Not found", 404)
     }
 
     /// Gateway-mediated join: the client socket lives on ClientGatewayObject;
     /// this room only registers the media/presence client. Access was already
     /// validated by `fetch_inner` (`device_member`).
-    async fn gateway_join(&self, room: &mut Room, token: &str, observe: bool, group: &Group) -> Result<Response> {
-        let db = self.env.d1("dashboard")?;
-        let repo = WalkieRepository(&db);
-        // Resolve the caller's user id from its device profile path.
-        let (_, uid) = repo.device_member(&group.id, token).await
-            .map_err(|e| Error::RustError(e.message))?;
-        if !observe && room.clients.values().any(|c| c.token == token && !c.observe) {
+    async fn gateway_join(
+        &self,
+        room: &mut Room,
+        token: &str,
+        uid: i64,
+        observe: bool,
+        group: &Group,
+        repo: &WalkieRepository<'_>,
+    ) -> Result<Response> {
+        if !observe
+            && room
+                .clients
+                .values()
+                .any(|c| c.token == token && !c.observe)
+        {
             return Response::error("Caller audio is already active in another tab.", 409);
         }
         let id = random_id().map_err(|e| Error::RustError(e.message))?;
-        let device_id = repo.public_id(token).await.map_err(|e| Error::RustError(e.message))?;
         let profile = repo.profile(token).await.map_err(|e| Error::RustError(e.message))?;
-        room.group_id = group.id.clone();
+        let device_id = profile.device_id;
         room.clients.insert(id.clone(), Client {
             device_id: device_id.clone(), observe, user_id: uid, token: token.into(),
             name: profile.first_name.clone(), first_name: profile.first_name,
@@ -447,14 +523,13 @@ impl WalkieGroupObject {
         if let Some(call) = room.call.take() { Self::retire_media(room, &call.participants); }
     }
 
-    async fn signal(&self, room: &mut Room, connection_id: &str, data: &Value) -> Result<()> {
-        if let Some(client) = room.clients.get_mut(connection_id) { client.last_seen = now(); }
-        self.prune(room).await?;
-        let Some(client) = room.clients.get(connection_id) else { return Ok(()) };
+    fn signal(room: &mut Room, connection_id: &str, data: &Value) -> Result<Option<Value>> {
+        let Some(client) = room.clients.get(connection_id) else {
+            return Ok(None);
+        };
         let device_id = client.device_id.clone();
         let published = client.published && !client.observe;
         let kind = data.get("type").and_then(Value::as_str).unwrap_or("");
-        if kind == "heartbeat" { return Ok(()); }
         let mut reply = json!({"type":"error", "connection_id":connection_id,
             "request_id":data.get("request_id"), "message":"This call is no longer available."});
         if data.get("protocol_version").and_then(Value::as_u64) != Some(2) {
@@ -496,17 +571,14 @@ impl WalkieGroupObject {
                 else if kind == "call_end" || kind == "call_cancel" { Self::end_call(room); }
             } else { reply["message"] = json!("This call action is not permitted."); }
         }
-        // Persist before acknowledgement; snapshots follow in fetch_inner.
-        self.save(room).await?;
-        self.send(room, connection_id, &reply).await;
-        Ok(())
+        Ok(Some(reply))
     }
 
     async fn disconnected_id(&self, connection_id: &str) -> Result<()> {
         let mut room = self.load().await?;
         self.remove(&mut room, connection_id, "Disconnected.").await;
-        self.broadcast(&room).await?;
         self.save(&room).await?;
+        self.broadcast(&room).await?;
         Ok(())
     }
 }
@@ -569,21 +641,22 @@ impl DurableObject for WalkieGroupObject {
         Ok(())
     }
     async fn alarm(&self) -> Result<Response> {
-        self.state
+        let has_cleanup = self
+            .state
             .block_concurrency_while({
                 let coordinator = self.clone();
                 async move {
                     let mut room = coordinator.load().await?;
-                    coordinator.prune_state(&mut room).await?;
-                    coordinator.broadcast(&room).await?;
-                    coordinator.save(&room).await?;
-                    Response::ok("ok")
+                    coordinator.refresh_presence(&mut room, true).await?;
+                    Ok(!room.cleanup.is_empty() || room.cleanup_in_flight.is_some())
                 }
             })
             .await?;
-        self.drain_cleanup()
-            .await
-            .map_err(|error| Error::RustError(error.message))?;
+        if has_cleanup {
+            self.drain_cleanup()
+                .await
+                .map_err(|error| Error::RustError(error.message))?;
+        }
         Response::ok("ok")
     }
 }

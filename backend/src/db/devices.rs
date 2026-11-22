@@ -11,14 +11,10 @@ pub async fn upsert_pairing_code(
 ) -> Result<PairingCode> {
     let args = [D1Type::Text(session_id), D1Type::Text(short_code)];
     let stmt = db.prepare(queries::upsert_pairing_code_sql());
-    stmt.bind_refs(&args)?.run().await?;
-
-    let stmt = db.prepare(queries::get_pairing_code_sql());
-    let args = [D1Type::Text(session_id)];
     stmt.bind_refs(&args)?
         .first::<PairingCode>(None)
         .await?
-        .ok_or_else(|| Error::RustError("Failed to load pairing code after insert.".to_string()))
+        .ok_or_else(|| Error::RustError("Pairing code upsert returned no row.".to_string()))
 }
 
 pub async fn get_pairing_code(
@@ -143,25 +139,57 @@ pub async fn get_device_widgets(
     let stmt = db.prepare(queries::get_device_widgets_sql());
     let result = stmt.bind_refs(&[D1Type::Text(token)])?.all().await?;
     let rows: Vec<WidgetRow> = result.results::<WidgetRow>()?;
-    Ok(rows.into_iter().map(WidgetRow::into_widget).collect())
+    Ok(rows
+        .into_iter()
+        .filter_map(WidgetRow::into_widget)
+        .collect())
+}
+
+pub async fn get_authorized_device_widgets(
+    db: &D1Database,
+    token: &str,
+    owner: Option<i64>,
+) -> Result<Option<Vec<crate::models::device::DeviceWidget>>> {
+    // A valid device with no widgets still produces a row with a null widget key.
+    let sql = format!(
+        "SELECT w.widget_key, COALESCE(w.enabled, 0) AS enabled,
+                COALESCE(w.config_json, '{{}}') AS config_json
+         FROM device_tokens t LEFT JOIN device_widgets w ON w.token=t.token
+         WHERE t.token=?1 AND t.expires_at>{} AND (?2 IS NULL OR t.user_id=?2)
+         ORDER BY w.widget_key ASC",
+        crate::common::SQL_NOW,
+    );
+    let owner = owner
+        .map(user_id_param)
+        .transpose()?
+        .unwrap_or(D1Type::Null);
+    let result = db
+        .prepare(&sql)
+        .bind_refs(&[D1Type::Text(token), owner])?
+        .all()
+        .await?;
+    let rows = result.results::<WidgetRow>()?;
+    Ok((!rows.is_empty()).then(|| {
+        rows.into_iter()
+            .filter_map(WidgetRow::into_widget)
+            .collect()
+    }))
 }
 
 #[derive(serde::Deserialize)]
 struct WidgetRow {
-    widget_key: String,
+    widget_key: Option<String>,
     enabled: i64,
     config_json: String,
-    #[allow(dead_code)]
-    updated_at: String,
 }
 
 impl WidgetRow {
-    fn into_widget(self) -> crate::models::device::DeviceWidget {
-        crate::models::device::DeviceWidget {
-            widget_key: self.widget_key,
+    fn into_widget(self) -> Option<crate::models::device::DeviceWidget> {
+        Some(crate::models::device::DeviceWidget {
+            widget_key: self.widget_key?,
             enabled: self.enabled != 0,
             config: serde_json::from_str(&self.config_json).unwrap_or(serde_json::json!({})),
-        }
+        })
     }
 }
 

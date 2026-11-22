@@ -39,6 +39,18 @@ pub struct Member {
     pub audio_active: bool,
 }
 
+impl Member {
+    fn normalize_name(&mut self) {
+        self.first_name = self
+            .name
+            .split_whitespace()
+            .next()
+            .unwrap_or("Member")
+            .to_string();
+        self.name = self.first_name.clone();
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Group {
     pub id: String,

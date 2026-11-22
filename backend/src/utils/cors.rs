@@ -49,15 +49,17 @@ pub fn is_websocket_upgrade(status_code: u16) -> bool {
 }
 
 #[cfg(not(any(test, coverage)))]
-pub fn apply_cors(origin: Option<&str>, allowed: &[String], mut res: Response) -> Result<Response> {
+pub fn apply_cors(origin: Option<&str>, allowed: &[String], res: Response) -> Result<Response> {
     if is_origin_allowed(origin, allowed) {
         if let Some(origin) = origin {
-            let headers = res.headers_mut();
+            // Fetched responses can have immutable headers. Preserve their body stream.
+            let headers = res.headers().clone();
             headers.set("Access-Control-Allow-Origin", origin)?;
             // Credentialed requests (the login cookie) require the exact
             // origin above plus this flag; a wildcard origin is never used.
             headers.set("Access-Control-Allow-Credentials", "true")?;
             headers.set("Vary", "Origin")?;
+            return Ok(res.with_headers(headers));
         }
     }
     Ok(res)

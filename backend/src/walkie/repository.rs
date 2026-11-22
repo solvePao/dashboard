@@ -3,8 +3,14 @@ use crate::db::helper::user_id_param;
 use crate::models::device::DeviceWidget;
 use crate::services::store::{DeviceNotifier, HubNotifier};
 use crate::services::{DoDeviceNotifier, DoHubNotifier};
+use futures_util::stream::{self, StreamExt};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
+use std::collections::HashMap;
+
+const PROFILE_COLUMNS: &str = "d.device_id,t.user_id,COALESCE(NULLIF(u.name,''),'Member') AS name,t.device_name,u.picture_url";
+const PROFILE_TABLES: &str =
+    "walkie_devices d JOIN device_tokens t ON t.token=d.token JOIN users u ON u.id=t.user_id";
 
 pub struct WalkieRepository<'a>(pub &'a D1Database);
 
@@ -105,24 +111,33 @@ impl WalkieRepository<'_> {
     }
 
     pub async fn public_id(&self, token: &str) -> AppResult<String> {
-        self.execute(
-            "INSERT INTO walkie_devices(token) VALUES(?) ON CONFLICT(token) DO NOTHING",
-            &[D1Type::Text(token)],
-        )
-        .await?;
         #[derive(Deserialize)]
         struct Identity {
             device_id: String,
         }
-        self.rows::<Identity>(
-            "SELECT device_id FROM walkie_devices WHERE token=?",
-            &[D1Type::Text(token)],
-        )
-        .await?
-        .into_iter()
-        .next()
-        .map(|d| d.device_id)
-        .ok_or_else(|| AppError::not_found("Device not found."))
+
+        let args = [D1Type::Text(token)];
+        let lookup = self
+            .0
+            .prepare("SELECT device_id FROM walkie_devices WHERE token=?")
+            .bind_refs(&args)
+            .map_err(db_error)?;
+        if let Some(identity) = lookup.first::<Identity>(None).await.map_err(db_error)? {
+            return Ok(identity.device_id);
+        }
+        let insert = self
+            .0
+            .prepare("INSERT INTO walkie_devices(token) VALUES(?) ON CONFLICT(token) DO NOTHING")
+            .bind_refs(&args)
+            .map_err(db_error)?;
+        let results = self.0.batch(vec![insert, lookup]).await.map_err(db_error)?;
+        results[1]
+            .results::<Identity>()
+            .map_err(db_error)?
+            .into_iter()
+            .next()
+            .map(|identity| identity.device_id)
+            .ok_or_else(|| AppError::not_found("Device not found."))
     }
 
     pub async fn member(&self, group: &str, token: &str) -> AppResult<Group> {
@@ -140,16 +155,10 @@ impl WalkieRepository<'_> {
     }
 
     async fn profiles(&self, clause: &str, args: &[D1Type<'_>]) -> AppResult<Vec<Member>> {
-        let sql=format!("SELECT d.device_id,t.user_id,COALESCE(NULLIF(u.name,''),'Member') AS name,t.device_name,u.picture_url FROM walkie_devices d JOIN device_tokens t ON t.token=d.token JOIN users u ON u.id=t.user_id {clause}");
+        let sql = format!("SELECT {PROFILE_COLUMNS} FROM {PROFILE_TABLES} {clause}");
         let mut members = self.rows::<Member>(&sql, args).await?;
         for member in &mut members {
-            member.first_name = member
-                .name
-                .split_whitespace()
-                .next()
-                .unwrap_or("Member")
-                .to_string();
-            member.name = member.first_name.clone();
+            member.normalize_name();
         }
         Ok(members)
     }
@@ -158,27 +167,125 @@ impl WalkieRepository<'_> {
         self.profiles("JOIN walkie_device_members m ON m.token=t.token WHERE m.group_id=? ORDER BY t.created_at,d.device_id", &[D1Type::Text(group)]).await
     }
 
-    pub async fn groups(&self, uid: i64, token: &str) -> AppResult<Vec<Group>> {
-        let mut groups = self.rows::<Group>("SELECT g.*, EXISTS(SELECT 1 FROM walkie_device_members m WHERE m.group_id=g.id AND m.token=?) AS joined, EXISTS(SELECT 1 FROM walkie_assignments a WHERE a.group_id=g.id AND a.token=?) AS active FROM walkie_groups g WHERE g.owner_id=? OR EXISTS(SELECT 1 FROM walkie_device_members m WHERE m.group_id=g.id AND m.token=?) ORDER BY g.created_at",
-            &[D1Type::Text(token),D1Type::Text(token),user_id_param(uid).map_err(db_error)?,D1Type::Text(token)]).await?;
-        for g in &mut groups {
-            g.members = self.members(&g.id).await?;
+    pub async fn groups(&self, uid: i64, token: &str, joined_only: bool) -> AppResult<Vec<Group>> {
+        #[derive(Deserialize)]
+        struct RosterEntry {
+            group_id: String,
+            #[serde(flatten)]
+            member: Member,
+        }
+
+        let args = [
+            D1Type::Text(token),
+            user_id_param(uid).map_err(db_error)?,
+            D1Type::Integer(i32::from(joined_only)),
+        ];
+        let joined = "EXISTS(SELECT 1 FROM walkie_device_members own WHERE own.group_id=g.id AND own.token=?1)";
+        let visible = "WITH visible AS (
+            SELECT id FROM walkie_groups WHERE ?3=0 AND owner_id=?2
+            UNION SELECT group_id FROM walkie_device_members WHERE token=?1
+        )";
+        let groups = self.0.prepare(&format!(
+            "{visible}
+             SELECT g.*, {joined} AS joined,
+                    EXISTS(SELECT 1 FROM walkie_assignments a WHERE a.group_id=g.id AND a.token=?1) AS active
+             FROM visible v JOIN walkie_groups g ON g.id=v.id ORDER BY g.created_at"
+        )).bind_refs(&args).map_err(db_error)?;
+        let roster = self
+            .0
+            .prepare(&format!(
+                "{visible}
+             SELECT m.group_id, {PROFILE_COLUMNS} FROM {PROFILE_TABLES}
+             JOIN walkie_device_members m ON m.token=t.token
+             JOIN visible v ON v.id=m.group_id ORDER BY t.created_at,d.device_id"
+            ))
+            .bind_refs(&args)
+            .map_err(db_error)?;
+        let results = self.0.batch(vec![groups, roster]).await.map_err(db_error)?;
+        let mut groups = results[0].results::<Group>().map_err(db_error)?;
+        let mut members = HashMap::<String, Vec<Member>>::new();
+        for mut entry in results[1].results::<RosterEntry>().map_err(db_error)? {
+            entry.member.normalize_name();
+            members
+                .entry(entry.group_id)
+                .or_default()
+                .push(entry.member);
+        }
+        for group in &mut groups {
+            group.members = members.remove(&group.id).unwrap_or_default();
         }
         Ok(groups)
     }
 
     pub async fn device_member(&self, group: &str, token: &str) -> AppResult<(Group, i64)> {
-        let uid = crate::db::get_device_token_owner(self.0, token)
-            .await
-            .map_err(db_error)?
+        self.device_access(token, Some(group)).await
+    }
+
+    async fn device_access(&self, token: &str, group: Option<&str>) -> AppResult<(Group, i64)> {
+        #[derive(Deserialize)]
+        struct Access {
+            assignment: Option<String>,
+            user_id: Option<i64>,
+            widget_token: Option<String>,
+            id: Option<String>,
+            name: Option<String>,
+            owner_id: Option<i64>,
+            config_matches: Option<i32>,
+        }
+
+        let access = self.0.prepare(&format!(
+            "SELECT a.group_id AS assignment, t.user_id, w.token AS widget_token,
+                    g.id, g.name, g.owner_id,
+                    CASE WHEN ?2 IS NULL AND g.id IS NOT NULL THEN
+                        json_extract(w.config_json, '$.group_id') = a.group_id END AS config_matches
+             FROM (SELECT ?1 AS token) AS requested
+             LEFT JOIN walkie_assignments a ON a.token=requested.token AND ?2 IS NULL
+             LEFT JOIN device_tokens t ON t.token=requested.token AND t.expires_at>{}
+             LEFT JOIN device_widgets w ON w.token=t.token AND w.widget_key='walkie_talkie' AND w.enabled=1
+             LEFT JOIN walkie_device_members m ON m.token=w.token AND m.group_id=COALESCE(?2,a.group_id)
+             LEFT JOIN walkie_groups g ON g.id=m.group_id",
+            crate::common::SQL_NOW,
+        ))
+        .bind_refs(&[D1Type::Text(token), group.map_or(D1Type::Null, D1Type::Text)])
+        .map_err(db_error)?
+        .first::<Access>(None).await.map_err(db_error)?
+        .ok_or_else(|| AppError::internal("Could not check Caller access. Please retry."))?;
+
+        if group.is_none() && access.assignment.is_none() {
+            return Err(AppError::forbidden(
+                "Choose an active walkie-talkie group for this device.",
+            ));
+        }
+        let uid = access
+            .user_id
             .ok_or_else(|| AppError::unauthorized("Device authorization expired."))?;
-        let enabled = self.rows::<serde_json::Value>("SELECT token FROM device_widgets WHERE token=? AND widget_key='walkie_talkie' AND enabled=1", &[D1Type::Text(token)]).await?;
-        if enabled.is_empty() {
+        if access.widget_token.is_none() {
             return Err(AppError::forbidden(
                 "Walkie-talkie is disabled on this device.",
             ));
         }
-        Ok((self.member(group, token).await?, uid))
+        let (Some(id), Some(name), Some(owner_id)) = (access.id, access.name, access.owner_id)
+        else {
+            return Err(AppError::not_found(
+                "This device is not a member of the group.",
+            ));
+        };
+        if group.is_none() && access.config_matches != Some(1) {
+            return Err(AppError::forbidden(
+                "The active group changed. Refresh device settings.",
+            ));
+        }
+        Ok((
+            Group {
+                id,
+                name,
+                owner_id,
+                members: Vec::new(),
+                joined: false,
+                active: false,
+            },
+            uid,
+        ))
     }
 
     pub async fn active_id(&self, token: &str) -> AppResult<Option<String>> {
@@ -198,17 +305,7 @@ impl WalkieRepository<'_> {
     }
 
     pub async fn device_group(&self, token: &str) -> AppResult<(Group, i64)> {
-        let id = self.active_id(token).await?.ok_or_else(|| {
-            AppError::forbidden("Choose an active walkie-talkie group for this device.")
-        })?;
-        let result = self.device_member(&id, token).await?;
-        let valid=self.rows::<serde_json::Value>("SELECT token FROM device_widgets WHERE token=? AND widget_key='walkie_talkie' AND json_extract(config_json,'$.group_id')=?", &[D1Type::Text(token),D1Type::Text(&id)]).await?;
-        if valid.is_empty() {
-            return Err(AppError::forbidden(
-                "The active group changed. Refresh device settings.",
-            ));
-        }
-        Ok(result)
+        self.device_access(token, None).await
     }
 
     pub async fn rate_limit(&self, bucket: &str, limit: i32) -> AppResult<()> {
@@ -217,19 +314,25 @@ impl WalkieRepository<'_> {
             attempts: i32,
         }
         let window = (now() / 60_000) as i32;
-        let count = self.0.prepare("INSERT INTO walkie_rate_limits(bucket,window,attempts) VALUES(?,?,1) ON CONFLICT(bucket) DO UPDATE SET attempts=CASE WHEN window=excluded.window THEN attempts+1 ELSE 1 END, window=excluded.window RETURNING attempts")
-            .bind_refs(&[D1Type::Text(bucket), D1Type::Integer(window)]).map_err(db_error)?.first::<Count>(None).await.map_err(db_error)?;
-        if count.is_some_and(|c| c.attempts > limit) {
+        let increment = self.0.prepare("INSERT INTO walkie_rate_limits(bucket,window,attempts) VALUES(?,?,1) ON CONFLICT(bucket) DO UPDATE SET attempts=CASE WHEN window=excluded.window THEN attempts+1 ELSE 1 END, window=excluded.window RETURNING attempts")
+            .bind_refs(&[D1Type::Text(bucket), D1Type::Integer(window)]).map_err(db_error)?;
+        let prune = self
+            .0
+            .prepare("DELETE FROM walkie_rate_limits WHERE window < ?")
+            .bind_refs(&[D1Type::Integer(window - 2)])
+            .map_err(db_error)?;
+        let results = self
+            .0
+            .batch(vec![increment, prune])
+            .await
+            .map_err(db_error)?;
+        let counts = results[0].results::<Count>().map_err(db_error)?;
+        if counts.first().is_some_and(|count| count.attempts > limit) {
             return Err(AppError::too_many_requests(
                 "Too many attempts. Wait a minute and retry.",
             ));
         }
-        // Bound retained rate-limit state without keeping historical activity.
-        self.execute(
-            "DELETE FROM walkie_rate_limits WHERE window < ?",
-            &[D1Type::Integer(window - 2)],
-        )
-        .await
+        Ok(())
     }
 }
 
@@ -267,12 +370,11 @@ pub async fn save_widgets(
     }
     #[derive(Deserialize)]
     struct Assignment {
-        token: String,
         group_id: String,
     }
     let mut affected: Vec<Assignment> = repo
         .rows(
-            "SELECT token,group_id FROM walkie_assignments WHERE token=?",
+            "SELECT group_id FROM walkie_assignments WHERE token=?",
             &[D1Type::Text(token)],
         )
         .await?;
@@ -320,7 +422,6 @@ pub async fn save_widgets(
                 .map_err(db_error)?,
         );
         affected.push(Assignment {
-            token: token.into(),
             group_id: g.into(),
         });
     }
@@ -342,33 +443,30 @@ pub async fn save_widgets(
         {
             if !affected.iter().any(|a| a.group_id == m.group_id) {
                 affected.push(Assignment {
-                    token: token.into(),
                     group_id: m.group_id,
                 });
             }
         }
     }
-    let mut cleanup_pending = false;
-    for a in &affected {
-        // An old session must never survive a disable/reassign, even to the same group.
-        cleanup_pending |= invalidate_device(env, &a.group_id, &a.token).await;
-        notify_device(env, &a.token).await;
-    }
-    notify_device(env, token).await;
-    if let Ok(hub) = DoHubNotifier::from_env(env) {
-        hub.notify_hub(
-            uid,
-            crate::common::DeviceLifecycleKind::WidgetsUpdated,
-            Some(token),
-        )
-        .await;
-    }
-    Ok((
-        crate::db::get_device_widgets(db, token)
-            .await
-            .map_err(db_error)?,
-        cleanup_pending,
-    ))
+    // An old session must never survive a disable/reassign, even to the same group.
+    let cleanup_pending =
+        invalidate_device_groups(env, token, affected.into_iter().map(|a| a.group_id)).await;
+    let notify_hub = async {
+        if let Ok(hub) = DoHubNotifier::from_env(env) {
+            hub.notify_hub(
+                uid,
+                crate::common::DeviceLifecycleKind::WidgetsUpdated,
+                Some(token),
+            )
+            .await;
+        }
+    };
+    let (widgets, _, _) = futures_util::join!(
+        crate::db::get_device_widgets(db, token),
+        notify_device(env, token),
+        notify_hub,
+    );
+    Ok((widgets.map_err(db_error)?, cleanup_pending))
 }
 
 pub async fn notify_device(env: &Env, token: &str) {
@@ -394,15 +492,22 @@ pub async fn wake_group_devices(
             &[D1Type::Text(group_id)],
         )
         .await?;
-    let mut count = 0;
-    if let Ok(notifier) = DoDeviceNotifier::from_env(env) {
-        for m in members {
-            if sender_token.is_none_or(|st| st != m.token) {
-                notifier.notify_walkie_activate(&m.token, group_id).await;
-                count += 1;
-            }
-        }
-    }
+    let Ok(notifier) = DoDeviceNotifier::from_env(env) else {
+        return Ok(0);
+    };
+    let notifier = &notifier;
+    let targets: Vec<_> = members
+        .into_iter()
+        .filter(|member| sender_token != Some(member.token.as_str()))
+        .collect();
+    let count = targets.len();
+    stream::iter(targets)
+        .for_each_concurrent(5, |member| async move {
+            notifier
+                .notify_walkie_activate(&member.token, group_id)
+                .await;
+        })
+        .await;
     Ok(count)
 }
 
@@ -414,35 +519,18 @@ pub async fn auto_enroll_account_devices(
 ) -> AppResult<()> {
     let repo = WalkieRepository(db);
     #[derive(Deserialize)]
-    struct Count {
-        count: i64,
-    }
-    let current_count = repo
-        .rows::<Count>(
-            "SELECT count(*) as count FROM walkie_device_members WHERE group_id=?",
-            &[D1Type::Text(group_id)],
-        )
-        .await?
-        .first()
-        .map(|c| c.count)
-        .unwrap_or(0);
-
-    let remaining = 5 - current_count;
-    if remaining <= 0 {
-        return Ok(());
-    }
-
-    #[derive(Deserialize)]
     struct TokenRow {
         token: String,
     }
+    let owner = user_id_param(uid).map_err(db_error)?;
+    let expiry = crate::common::SQL_NOW;
     let unassigned = repo
         .rows::<TokenRow>(
-            "SELECT t.token FROM device_tokens t \
-             WHERE t.user_id=? AND t.expires_at>strftime('%Y-%m-%dT%H:%M:%fZ','now') \
-             AND NOT EXISTS(SELECT 1 FROM walkie_device_members m WHERE m.group_id=? AND m.token=t.token) \
-             LIMIT ?",
-            &[user_id_param(uid).map_err(db_error)?, D1Type::Text(group_id), D1Type::Integer(remaining as i32)],
+            &format!("SELECT t.token FROM device_tokens t
+             WHERE t.user_id=?1 AND t.expires_at>{expiry}
+             AND NOT EXISTS(SELECT 1 FROM walkie_device_members m WHERE m.group_id=?2 AND m.token=t.token)
+             LIMIT MAX(0, 5-(SELECT count(*) FROM walkie_device_members WHERE group_id=?2))"),
+            &[owner, D1Type::Text(group_id)],
         )
         .await?;
 
@@ -450,46 +538,71 @@ pub async fn auto_enroll_account_devices(
         return Ok(());
     }
 
+    let member_sql = format!(
+        "INSERT INTO walkie_device_members(group_id,token)
+        SELECT g.id,t.token FROM walkie_groups g JOIN device_tokens t ON t.token=?1
+        WHERE g.id=?2 AND g.owner_id=?3 AND t.user_id=g.owner_id AND t.expires_at>{expiry}
+        AND (SELECT count(*) FROM walkie_device_members WHERE group_id=g.id)<5
+        ON CONFLICT(group_id,token) DO NOTHING"
+    );
+    let widget_sql = format!(
+        "INSERT INTO device_widgets(token,widget_key,enabled,config_json)
+        SELECT t.token,'walkie_talkie',1,json_object('group_id',a.group_id)
+        FROM device_tokens t JOIN walkie_device_members m ON m.token=t.token
+        LEFT JOIN walkie_assignments a ON a.token=t.token
+        WHERE t.token=?1 AND m.group_id=?2 AND t.expires_at>{expiry}
+        ON CONFLICT(token,widget_key) DO UPDATE SET enabled=1,config_json=excluded.config_json
+        RETURNING token"
+    );
+    // Recheck expiry and available seats in the write transaction, since a
+    // concurrent enrollment or revocation may have changed the candidate set.
+    let mut statements = Vec::with_capacity(unassigned.len() * 4);
     for row in &unassigned {
-        repo.execute(
-            "INSERT INTO walkie_devices(token) VALUES(?) ON CONFLICT(token) DO NOTHING",
-            &[D1Type::Text(&row.token)],
-        )
-        .await?;
-
-        repo.execute(
-            "INSERT INTO walkie_device_members(group_id,token) VALUES(?,?) ON CONFLICT(group_id,token) DO NOTHING",
-            &[D1Type::Text(group_id), D1Type::Text(&row.token)],
-        )
-        .await?;
-
-        let has_assignment = !repo
-            .rows::<TokenRow>(
-                "SELECT token FROM walkie_assignments WHERE token=?",
-                &[D1Type::Text(&row.token)],
+        let token = D1Type::Text(&row.token);
+        statements.push(
+            db.prepare(
+                "INSERT INTO walkie_devices(token)
+            SELECT token FROM device_tokens WHERE token=?1 ON CONFLICT(token) DO NOTHING",
             )
-            .await?
-            .is_empty();
-
-        if !has_assignment {
-            repo.execute(
-                "INSERT INTO walkie_assignments(token,group_id,user_id) VALUES(?,?,?)",
-                &[D1Type::Text(&row.token), D1Type::Text(group_id), user_id_param(uid).map_err(db_error)?],
+            .bind_refs(&[token])
+            .map_err(db_error)?,
+        );
+        statements.push(
+            db.prepare(&member_sql)
+                .bind_refs(&[
+                    D1Type::Text(&row.token),
+                    D1Type::Text(group_id),
+                    user_id_param(uid).map_err(db_error)?,
+                ])
+                .map_err(db_error)?,
+        );
+        let membership = [D1Type::Text(&row.token), D1Type::Text(group_id)];
+        statements.push(
+            db.prepare(
+                "INSERT INTO walkie_assignments(token,group_id,user_id)
+            SELECT t.token,m.group_id,t.user_id FROM device_tokens t
+            JOIN walkie_device_members m ON m.token=t.token
+            WHERE t.token=?1 AND m.group_id=?2 ON CONFLICT(token) DO NOTHING",
             )
-            .await?;
-        }
-
-        let active_group = repo.active_id(&row.token).await?;
-        let config = json!({"group_id": active_group}).to_string();
-        repo.execute(
-            "INSERT INTO device_widgets(token,widget_key,enabled,config_json) VALUES(?,'walkie_talkie',1,?) \
-             ON CONFLICT(token,widget_key) DO UPDATE SET enabled=1,config_json=excluded.config_json",
-            &[D1Type::Text(&row.token), D1Type::Text(&config)],
-        )
-        .await?;
-
-        notify_device(env, &row.token).await;
+            .bind_refs(&membership)
+            .map_err(db_error)?,
+        );
+        statements.push(
+            db.prepare(&widget_sql)
+                .bind_refs(&membership)
+                .map_err(db_error)?,
+        );
     }
+    let results = db.batch(statements).await.map_err(db_error)?;
+    let mut updated = Vec::new();
+    for result in results.iter().skip(3).step_by(4) {
+        updated.extend(result.results::<TokenRow>().map_err(db_error)?);
+    }
+    stream::iter(updated)
+        .for_each_concurrent(5, |row| async move {
+            notify_device(env, &row.token).await;
+        })
+        .await;
 
     Ok(())
 }
@@ -503,4 +616,16 @@ pub async fn invalidate_device(env: &Env, group: &str, token: &str) -> bool {
             true
         }
     }
+}
+
+pub async fn invalidate_device_groups(
+    env: &Env,
+    token: &str,
+    groups: impl IntoIterator<Item = String>,
+) -> bool {
+    stream::iter(groups)
+        .map(|group| async move { invalidate_device(env, &group, token).await })
+        .buffer_unordered(5)
+        .fold(false, |pending, result| async move { pending || result })
+        .await
 }

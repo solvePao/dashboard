@@ -60,7 +60,7 @@ pub async fn logout(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
     Ok(res)
 }
 
-pub async fn get_user(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn get_user(req: Request, ctx: RouteContext<()>, context: &Context) -> Result<Response> {
     let sub = match validation::require_route_sub(ctx.param("sub").map(String::as_str)) {
         Ok(s) => s,
         Err(err) => return err.to_response(),
@@ -79,22 +79,20 @@ pub async fn get_user(req: Request, ctx: RouteContext<()>) -> Result<Response> {
 
     // Caller must hold a valid session JWT (or device token) whose
     // identity matches the requested sub.
-    let user = match AuthService::authenticate(&token, &ctx.env, &db).await {
-        Ok(u) => u,
-        Err(err) => return err.to_response(),
-    };
+    let user =
+        match AuthService::authenticate_with_context(&token, &ctx.env, &db, Some(context)).await {
+            Ok(u) => u,
+            Err(err) => return err.to_response(),
+        };
 
     if let Err(err) = validation::require_sub_match(&user.google_sub, &sub) {
         return err.to_response();
     }
 
-    match AuthService::get_user_by_sub(&db, &sub).await {
-        Ok(user) => json_ok(&crate::models::auth::UserResponse { user }),
-        Err(err) => err.to_response(),
-    }
+    json_ok(&crate::models::auth::UserResponse { user })
 }
 
-pub async fn get_me(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn get_me(req: Request, ctx: RouteContext<()>, context: &Context) -> Result<Response> {
     let header = req.headers().get("Authorization").unwrap_or(None);
     let token = match validation::require_bearer_header(header.as_deref()) {
         Ok(t) => t,
@@ -106,7 +104,7 @@ pub async fn get_me(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         Err(err) => return err.to_response(),
     };
 
-    match AuthService::authenticate(&token, &ctx.env, &db).await {
+    match AuthService::authenticate_with_context(&token, &ctx.env, &db, Some(context)).await {
         Ok(user) => json_ok(&crate::models::auth::UserResponse { user }),
         Err(err) => err.to_response(),
     }
