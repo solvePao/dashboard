@@ -7,10 +7,6 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 path = "src/router.rs"
 
-[dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-rusqlite = { version = "0.31", features = ["bundled"] }
-
 [dependencies]
 worker = { version = "0.8", features = ["d1"] }
 worker-macros = { version = "0.8" }

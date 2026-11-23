@@ -112,10 +112,24 @@ impl SfuService<'_> {
             .map_err(|_| AppError::service_unavailable("TURN credentials are not configured."))?
             .to_string();
         let value=self.fetch(Method::Post,&format!("https://rtc.live.cloudflare.com/v1/turn/keys/{key}/credentials/generate-ice-servers"),&secret,Some(json!({"ttl":3600}))).await?;
-        value
+        let mut servers = value
             .get("iceServers")
+            .and_then(Value::as_array)
             .cloned()
-            .ok_or_else(|| AppError::bad_gateway("Invalid TURN response."))
+            .ok_or_else(|| AppError::bad_gateway("Invalid TURN response."))?;
+        // Browsers block port 53, which can delay non-trickle candidate gathering.
+        servers.retain_mut(|server| match server.get_mut("urls") {
+            Some(Value::Array(urls)) => {
+                urls.retain(browser_ice_url);
+                !urls.is_empty()
+            }
+            Some(url) => browser_ice_url(url),
+            None => false,
+        });
+        if servers.is_empty() {
+            return Err(AppError::bad_gateway("Invalid TURN response."));
+        }
+        Ok(Value::Array(servers))
     }
 
     pub async fn close(&self, session: &str, mids: &[String]) -> AppResult<()> {
@@ -135,4 +149,11 @@ impl SfuService<'_> {
             Err(e) => Err(e),
         }
     }
+}
+
+fn browser_ice_url(value: &Value) -> bool {
+    value.as_str().is_some_and(|url| {
+        let address = url.split_once('?').map_or(url, |(address, _)| address);
+        !address.ends_with(":53")
+    })
 }

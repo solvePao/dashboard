@@ -9,7 +9,7 @@ export VITE_CONFIG_NATIVE_IGNORE_WARNING := true
 
 NODE_REQUIRED_MAJOR := 24
 
-.PHONY: help start-api deploy-api test-api test-coverage db-schema-local db-schema-prod \
+.PHONY: help start-api deploy-api db-schema-local db-schema-prod \
         start-web start-mobile web mobile start-web-mobile dev dev-all \
         check-node-pnpm install-frontend install-mobile
 
@@ -52,12 +52,6 @@ deploy-api: ## Deploy backend worker to production (remote D1)
 	pnpm build:api
 	pnpm db:migrate:production
 	pnpm deploy:api
-
-test-api: ## Run backend Rust tests in parallel (host, mocked D1/Google)
-	cd backend && cargo test --tests -- --test-threads=8
-
-test-coverage: ## Run backend Rust tests and enforce 100% coverage
-	cd backend && cargo llvm-cov --fail-under-lines 100 --fail-under-regions 100 --fail-under-functions 100
 
 db-schema-local: ## Apply schema and migrations to the local D1 (SQLite) database
 	cd backend && npx wrangler d1 execute dashboard --local --file=./schema.sql

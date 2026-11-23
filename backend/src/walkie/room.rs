@@ -58,10 +58,26 @@ struct MediaSession {
     id: String,
     #[serde(default)]
     pending: bool,
+    #[serde(default)]
+    prepared: bool,
     mids: Vec<String>,
     target: Option<String>,
     #[serde(default)]
     attempts: u8,
+}
+
+impl Client {
+    fn has_publication(&self) -> bool {
+        !self.observe && self.sessions.iter().any(|session|
+            session.target.is_none() && !session.pending && !session.prepared && !session.mids.is_empty())
+    }
+}
+
+#[derive(Clone)]
+struct Roster {
+    group_name: String,
+    members: Vec<Member>,
+    expires_at: u64,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Ticket {
@@ -81,6 +97,7 @@ struct Attachment {
 pub struct WalkieGroupObject {
     state: std::rc::Rc<State>,
     env: Env,
+    roster: std::rc::Rc<std::cell::RefCell<Option<Roster>>>,
 }
 
 impl WalkieGroupObject {
@@ -160,11 +177,7 @@ impl WalkieGroupObject {
         if tokens.is_empty() {
             return Ok(());
         }
-        let db = self.env.d1("dashboard")?;
-        let repo = WalkieRepository(&db);
-        let (members, group) =
-            futures_util::join!(repo.members(&room.group_id), repo.group(&room.group_id));
-        let mut members = members.unwrap_or_default();
+        let (name, mut members) = self.roster(&room.group_id).await?;
         for member in &mut members {
             member.online = room
                 .clients
@@ -175,7 +188,6 @@ impl WalkieGroupObject {
                 .values()
                 .any(|c| c.device_id == member.device_id && c.published);
         }
-        let name = group.ok().map(|group| group.name);
         let value = json!({"type":"snapshot","group_name":name,"members":members,
             "clients":room.clients.iter().filter(|(_,c)|!c.observe).map(|(id,c)| json!({"connection_id":id,"device_id":c.device_id,"user_id":c.user_id,"name":c.first_name,"first_name":c.first_name,"picture_url":c.picture_url,"device_name":c.device_name,"published":c.published})).collect::<Vec<_>>(),
             "call": Self::call_json(room)});
@@ -194,6 +206,25 @@ impl WalkieGroupObject {
         }))
         .await;
         Ok(())
+    }
+
+    async fn roster(&self, group_id: &str) -> Result<(Option<String>, Vec<Member>)> {
+        let cached = self.roster.borrow().clone();
+        if let Some(roster) = cached.filter(|roster| roster.expires_at > now()) {
+            return Ok((Some(roster.group_name), roster.members));
+        }
+        let db = self.env.d1("dashboard")?;
+        let repo = WalkieRepository(&db);
+        let (members, group) = futures_util::join!(repo.members(group_id), repo.group(group_id));
+        let name = group.ok().map(|group| group.name);
+        if let (Ok(members), Some(name)) = (&members, &name) {
+            *self.roster.borrow_mut() = Some(Roster {
+                group_name: name.clone(),
+                members: members.clone(),
+                expires_at: now() + 15_000,
+            });
+        }
+        Ok((name, members.unwrap_or_default()))
     }
 
     async fn remove(&self, room: &mut Room, id: &str, reason: &str) {
@@ -272,6 +303,7 @@ impl WalkieGroupObject {
         }
         // Periodic snapshots also recover missed gateway deliveries and refresh roster metadata.
         if changed || from_alarm {
+            self.roster.borrow_mut().take();
             self.broadcast(room).await?;
         }
         Ok(())
@@ -292,6 +324,7 @@ impl WalkieGroupObject {
             );
         }
         if path == "/invalidate" {
+            self.roster.borrow_mut().take();
             let ids: Vec<String> = room
                 .clients
                 .iter()
@@ -412,6 +445,9 @@ impl WalkieGroupObject {
             };
             client.last_seen = now();
             let pruned = self.prune_state(&mut room).await?;
+            if pruned {
+                self.roster.borrow_mut().take();
+            }
             let reply = Self::signal(&mut room, connection, message)?;
             self.save(&room).await?;
             let mut changed = pruned;
@@ -492,7 +528,7 @@ impl WalkieGroupObject {
         });
         self.save(room).await?;
         self.broadcast(room).await?;
-        Response::from_json(&json!({"connection_id":id,"device_id":device_id,"user_id":uid,"group_id":group.id,"group_name":group.name}))
+        Response::from_json(&json!({"connection_id":id,"device_id":device_id,"user_id":uid,"group_id":group.id,"group_name":group.name,"fast_setup":!observe}))
     }
 
     fn leave_participant(room: &mut Room, id: &str) {
@@ -528,8 +564,11 @@ impl WalkieGroupObject {
             return Ok(None);
         };
         let device_id = client.device_id.clone();
-        let published = client.published && !client.observe;
         let kind = data.get("type").and_then(Value::as_str).unwrap_or("");
+        let ready_on_join = matches!(kind, "call_start" | "call_join")
+            && data.get("audio_ready").and_then(Value::as_bool) == Some(true)
+            && client.has_publication();
+        let published = !client.observe && (client.published || ready_on_join);
         let mut reply = json!({"type":"error", "connection_id":connection_id,
             "request_id":data.get("request_id"), "message":"This call is no longer available."});
         if data.get("protocol_version").and_then(Value::as_u64) != Some(2) {
@@ -571,6 +610,11 @@ impl WalkieGroupObject {
                 else if kind == "call_end" || kind == "call_cancel" { Self::end_call(room); }
             } else { reply["message"] = json!("This call action is not permitted."); }
         }
+        if ready_on_join && reply["type"] != "error" {
+            if let Some(client) = room.clients.get_mut(connection_id) {
+                client.published = true;
+            }
+        }
         Ok(Some(reply))
     }
 
@@ -588,6 +632,7 @@ impl DurableObject for WalkieGroupObject {
         Self {
             state: std::rc::Rc::new(state),
             env,
+            roster: Default::default(),
         }
     }
     async fn fetch(&self, req: Request) -> Result<Response> {

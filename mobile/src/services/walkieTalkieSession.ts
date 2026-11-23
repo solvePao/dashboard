@@ -1,8 +1,16 @@
 import { WalkieTalkieApi } from "../api/walkieTalkieApi";
 import { liveSocket } from "./liveSocket";
+import { mergeSnapshot } from "./walkieTalkieSnapshot";
+import { measureCaller } from "./walkieTalkieTiming";
 import type { MediaResponse, WalkieSnapshot, WalkieState } from "../types/walkieTalkie";
 
-interface Receiver { pc: RTCPeerConnection; audio: HTMLAudioElement; sessionId: string }
+interface Receiver {
+  pc: RTCPeerConnection;
+  audio: HTMLAudioElement;
+  controller: AbortController;
+  playing: boolean;
+  blocked: boolean;
+}
 interface PendingAction { resolve: (data: Record<string, unknown>) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }
 
 /** Media belongs to one explicit call action, never to widget visibility. */
@@ -18,25 +26,44 @@ export class WalkieTalkieSession {
   private connectionId = "";
   private callId = "";
   private snapshot?: WalkieSnapshot;
-  private queue: Promise<void> = Promise.resolve();
   private generation = 0;
-  private ready = false;
   private joined = false;
   private muted = false;
-  private state: WalkieState = { status: "ready", message: "Ready to call", groupName: "Caller", peers: [], members: [], playbackBlocked: false, inLiveCall: false, muted: false };
+  private fastSetup = false;
+  private measuredFirstPlayback = false;
+  private leaving = false;
+  private departing?: Promise<void>;
+  private readonly startedAt: number;
+  private state: WalkieState = { status: "ready", message: "Ready to call", groupName: "Caller", peers: [], members: [], playbackBlocked: false, audioPlaying: false, inLiveCall: false, muted: false };
 
   readonly groupId: string;
   private readonly changed: (state: WalkieState) => void;
-  constructor(groupId: string, changed: (state: WalkieState) => void) { this.groupId = groupId; this.changed = changed; }
+  constructor(groupId: string, startedAt: number, changed: (state: WalkieState) => void) {
+    this.groupId = groupId;
+    this.startedAt = startedAt;
+    this.changed = changed;
+  }
 
-  static async microphone(): Promise<MediaStream> {
+  static async microphone(signal: AbortSignal): Promise<MediaStream> {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("Microphone access requires HTTPS and a supported browser.");
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
-    stream.getAudioTracks().forEach(track => { track.enabled = false; });
-    return stream;
+    signal.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const abort = () => reject(signal.reason);
+      signal.addEventListener("abort", abort, { once: true });
+      void navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false }).then(stream => {
+        if (signal.aborted) {
+          stream.getTracks().forEach(track => track.stop());
+          return;
+        }
+        stream.getAudioTracks().forEach(track => { track.enabled = false; });
+        resolve(stream);
+      }, reject).finally(() => signal.removeEventListener("abort", abort));
+    });
   }
 
   private update(patch: Partial<WalkieState>): void {
+    const keys = Object.keys(patch) as (keyof WalkieState)[];
+    if (keys.every(key => patch[key] === this.state[key])) return;
     this.state = { ...this.state, ...patch }; this.changed(this.state);
   }
 
@@ -47,30 +74,37 @@ export class WalkieTalkieSession {
     this.update({ status: "connecting", message: "Connecting call…" });
     try {
       stream.getAudioTracks().forEach(track => { track.onended = () => this.failed(new Error("Microphone disconnected. Join again to retry.")); });
-      await Promise.race([liveSocket.whenOpen(), new Promise<never>((_, reject) => {
-        const timer = setTimeout(() => reject(new Error("Dashboard connection is unavailable.")), 10_000);
-        signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("Call canceled.")); }, { once: true });
-      })]);
-      if (signal.aborted) return;
+      await liveSocket.whenOpen(signal);
+      signal.throwIfAborted();
       await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("Call connection timed out.")), 15_000);
-        const abort = () => { clearTimeout(timer); reject(new Error("Call canceled.")); };
+        const finish = (error?: Error) => {
+          clearTimeout(timer);
+          signal.removeEventListener("abort", abort);
+          if (error) reject(error);
+          else resolve();
+        };
+        const timer = setTimeout(() => finish(new Error("Call connection timed out.")), 15_000);
+        const abort = () => finish(new Error("Call canceled."));
         signal.addEventListener("abort", abort, { once: true });
         this.unsubscribeWalkie = liveSocket.subscribeWalkie(this.groupId, false, envelope => {
           if (generation !== this.generation) return;
           const data = envelope as Record<string, unknown>;
           if (data.type === "connected" && data.observe === false && typeof data.connection_id === "string") {
             this.connectionId = data.connection_id;
+            this.fastSetup = data.fast_setup === true;
             if (typeof data.group_name === "string") this.update({ groupName: data.group_name });
-            clearTimeout(timer); signal.removeEventListener("abort", abort); resolve();
+            finish();
           } else if (data.type === "error" && !this.connectionId) {
-            clearTimeout(timer); signal.removeEventListener("abort", abort);
-            reject(new Error(String(data.message || "Could not connect call.")));
+            finish(new Error(String(data.message || "Could not connect call.")));
           } else this.message(data);
         });
       });
-      const ice = await this.api.media<{ ice_servers: RTCIceServer[] }>(this.groupId, this.connectionId, "ice", {}, signal);
+      const preparationStarted = performance.now();
+      const ice = await this.api.media<{ ice_servers: RTCIceServer[]; session_id?: string }>(
+        this.groupId, this.connectionId, this.fastSetup ? "prepare" : "ice", {}, signal);
       if (generation !== this.generation) return;
+      if (this.fastSetup && !ice.session_id) throw new Error("Audio service returned no prepared session.");
+      measureCaller("media preparation", preparationStarted);
       this.iceServers = ice.ice_servers;
       const pc = this.createPeer(); this.publisher = pc;
       pc.onconnectionstatechange = () => {
@@ -81,16 +115,19 @@ export class WalkieTalkieSession {
       const transceiver = pc.addTransceiver(track, { direction: "sendonly" });
       await pc.setLocalDescription(await pc.createOffer());
       await this.gather(pc, signal);
-      const result = await this.api.media<MediaResponse>(this.groupId, this.connectionId, "publish", { sdp: pc.localDescription?.sdp, mid: transceiver.mid }, signal);
+      const result = await this.api.media<MediaResponse>(this.groupId, this.connectionId, "publish", {
+        session_id: ice.session_id, sdp: pc.localDescription?.sdp, mid: transceiver.mid,
+      }, signal);
       if (generation !== this.generation) return;
       if (!result.sessionDescription) throw new Error("Audio service returned no connection answer.");
       await pc.setRemoteDescription(result.sessionDescription);
       await this.connected(pc, signal);
-      await this.api.media(this.groupId, this.connectionId, "ready", {}, signal);
+      measureCaller("tap to publisher connected", this.startedAt);
+      if (!this.fastSetup) await this.api.media(this.groupId, this.connectionId, "ready", {}, signal);
       if (generation !== this.generation) return;
-      this.ready = true;
-      const reply = await this.command(callId ? "call_join" : "call_start", callId);
+      const reply = await this.command(callId ? "call_join" : "call_start", callId, this.fastSetup);
       if (generation !== this.generation) return;
+      measureCaller("tap to call acknowledgement", this.startedAt);
       this.callId = String(reply.call_id);
       this.joined = true;
       this.update({ inLiveCall: true, callId: this.callId, status: callId ? "talking" : "calling", message: callId ? "In call" : "Calling group…", muted: false });
@@ -103,12 +140,12 @@ export class WalkieTalkieSession {
     }
   }
 
-  private command(type: string, callId = this.callId): Promise<Record<string, unknown>> {
+  private command(type: string, callId = this.callId, audioReady = false): Promise<Record<string, unknown>> {
     const requestId = crypto.randomUUID();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.actions.delete(requestId); reject(new Error("Call action timed out.")); }, 10_000);
       this.actions.set(requestId, { resolve, reject, timer });
-      liveSocket.sendWalkie(this.groupId, { type, call_id: callId, request_id: requestId });
+      liveSocket.sendWalkie(this.groupId, { type, call_id: callId, request_id: requestId, audio_ready: audioReady });
     });
   }
 
@@ -119,7 +156,11 @@ export class WalkieTalkieSession {
       if (data.type === "error") action.reject(new Error(String(data.message)));
       else action.resolve(data);
     }
-    if (data.type === "snapshot") { this.snapshot = data as unknown as WalkieSnapshot; this.applySnapshot(); }
+    if (data.type === "snapshot") {
+      const previous = this.snapshot;
+      this.snapshot = mergeSnapshot(previous, data as unknown as WalkieSnapshot);
+      if (this.snapshot !== previous) this.applySnapshot();
+    }
     else if (data.type === "socket_closed" || (data.type === "ended" && data.connection_id === this.connectionId)) {
       this.failed(new Error(String(data.reason || "Call disconnected. Join again to retry.")));
     }
@@ -138,49 +179,54 @@ export class WalkieTalkieSession {
       return;
     }
     this.update({ status: call.established ? "talking" : "calling", message: call.established ? "In call" : "Calling group… waiting for pickup", inLiveCall: true, callId: call.call_id });
-    this.microphone?.getAudioTracks().forEach(track => { track.enabled = !this.muted; });
-    this.applyPlaybackGate();
-    this.scheduleSubscriptions(this.generation);
+    this.syncReceivers(call.participants);
   }
 
   toggleMute(): void {
     this.muted = !this.muted;
-    this.microphone?.getAudioTracks().forEach(track => { track.enabled = this.joined && !this.muted; });
+    this.microphone?.getAudioTracks().forEach(track => { track.enabled = this.joined && !this.leaving && !this.muted; });
     this.update({ muted: this.muted });
   }
 
-  async leave(endForEveryone = false): Promise<void> {
-    // Silence capture at the gesture, without waiting for server I/O.
+  leave(endForEveryone = false): Promise<void> {
+    if (this.departing) return this.departing;
+    // Stop local audio as soon as the user leaves.
+    this.leaving = true;
     this.microphone?.getAudioTracks().forEach(track => { track.enabled = false; });
-    try { if (this.joined) await this.command(endForEveryone ? "call_end" : "call_leave"); }
-    finally { await this.close(); }
+    this.receivers.forEach(receiver => this.closeReceiver(receiver));
+    this.receivers.clear();
+    this.departing = this.depart(endForEveryone);
+    return this.departing;
   }
 
-  private scheduleSubscriptions(generation: number): void {
-    if (!this.ready || !this.joined) return;
-    this.queue = this.queue.then(async () => {
-      if (generation !== this.generation) return;
-      const call = this.snapshot?.call;
-      const targets = new Set(this.snapshot?.clients.filter(peer => peer.published && peer.connection_id !== this.connectionId && call?.participants.includes(peer.connection_id)).map(peer => peer.connection_id));
-      for (const [id, receiver] of this.receivers) {
-        if (!targets.has(id)) { this.closeReceiver(receiver); this.receivers.delete(id); await this.api.media(this.groupId, this.connectionId, "close", { target: id }, this.controller.signal); }
+  private async depart(endForEveryone: boolean): Promise<void> {
+    try {
+      if (this.joined) await this.command(endForEveryone ? "call_end" : "call_leave");
+    } finally {
+      await this.close();
+    }
+  }
+
+  private syncReceivers(participants: string[]): void {
+    if (this.leaving) return;
+    const targets = new Set(this.snapshot?.clients
+      .filter(peer => peer.published && peer.connection_id !== this.connectionId && participants.includes(peer.connection_id))
+      .map(peer => peer.connection_id));
+    for (const [id, receiver] of this.receivers) {
+      if (!targets.has(id)) {
+        // The room retires the matching provider session when the participant leaves.
+        this.closeReceiver(receiver);
+        this.receivers.delete(id);
       }
+    }
+    this.updatePlayback();
+    try {
       for (const target of targets) {
-        if (generation !== this.generation) return;
-        if (!this.receivers.has(target)) {
-          try { await this.subscribe(target, generation); }
-          catch (error) {
-            if (generation !== this.generation) return;
-            const latest = await this.api.callState(this.groupId, this.controller.signal);
-            if (latest.call?.call_id !== this.callId || !latest.call.participants.includes(target)) {
-              const receiver = this.receivers.get(target);
-              if (receiver) this.closeReceiver(receiver);
-              this.receivers.delete(target);
-            } else throw error;
-          }
-        }
+        if (!this.receivers.has(target)) this.startReceiver(target);
       }
-    }).catch(error => { if (generation === this.generation) this.failed(error); });
+    } catch (error) {
+      this.failed(error);
+    }
   }
 
   private createPeer(): RTCPeerConnection {
@@ -214,6 +260,7 @@ export class WalkieTalkieSession {
       pc.addEventListener("icecandidate", onCandidate);
       signal.addEventListener("abort", abort, { once: true });
       if (signal.aborted) abort();
+      else check();
     });
   }
 
@@ -232,57 +279,106 @@ export class WalkieTalkieSession {
       const timer = setTimeout(() => finish(new Error("Audio connection timed out.")), 15_000);
       pc.addEventListener("connectionstatechange", check); signal.addEventListener("abort", abort, { once: true });
       if (signal.aborted) abort();
+      else check();
     });
   }
 
-  private async subscribe(target: string, generation: number): Promise<void> {
+  private startReceiver(target: string): void {
     const pc = this.createPeer();
-    const audio = new Audio(); audio.autoplay = true; audio.muted = true;
-    const receiver: Receiver = { pc, audio, sessionId: "" };
+    const audio = new Audio();
+    const receiver: Receiver = { pc, audio, controller: new AbortController(), playing: false, blocked: false };
+    const signal = receiver.controller.signal;
     this.receivers.set(target, receiver);
-    pc.onconnectionstatechange = () => {
-      if (generation === this.generation && this.receivers.get(target) === receiver
-          && ["failed", "disconnected"].includes(pc.connectionState)) {
-        void this.api.callState(this.groupId, this.controller.signal).then(latest => {
-          if (generation === this.generation && latest.call?.call_id === this.callId && latest.call.participants.includes(target)) {
-            this.failed(new Error("Incoming audio disconnected. Join again to retry."));
-          }
-        }).catch(error => { if (generation === this.generation) this.failed(error); });
+    audio.onplaying = () => {
+      if (signal.aborted || this.leaving) return;
+      receiver.playing = true;
+      receiver.blocked = false;
+      this.updatePlayback();
+      if (!this.measuredFirstPlayback) {
+        this.measuredFirstPlayback = true;
+        measureCaller("tap to first incoming playback", this.startedAt);
       }
     };
     pc.ontrack = event => {
-      if (generation !== this.generation || this.receivers.get(target) !== receiver) return;
+      if (signal.aborted || this.leaving) return;
       audio.srcObject = new MediaStream([event.track]);
-      this.applyPlaybackGate();
-      void audio.play().catch(() => this.update({ playbackBlocked: true }));
+      void this.playReceiver(receiver);
     };
-    const result = await this.api.media<MediaResponse>(this.groupId, this.connectionId, "subscribe", { target }, this.controller.signal);
-    if (generation !== this.generation) return;
-    receiver.sessionId = result.session_id;
-    if (!result.sessionDescription) throw new Error("No incoming audio offer was returned.");
-    await pc.setRemoteDescription(result.sessionDescription);
-    if (generation !== this.generation) return;
-    await pc.setLocalDescription(await pc.createAnswer());
-    if (generation !== this.generation) return;
-    await this.gather(pc, this.controller.signal);
-    if (generation !== this.generation) return;
-    await this.api.media(this.groupId, this.connectionId, "answer", { session_id: receiver.sessionId, sdp: pc.localDescription?.sdp }, this.controller.signal);
-    if (generation !== this.generation) return;
-    await this.connected(pc, this.controller.signal);
-
+    void this.subscribe(target, receiver);
   }
 
-  private applyPlaybackGate(): void {
-    const call = this.snapshot?.call;
-    for (const [id, receiver] of this.receivers) {
-      receiver.audio.muted = !this.joined || !call?.participants.includes(id);
-      if (!receiver.audio.muted) void receiver.audio.play().catch(() => this.update({ playbackBlocked: true }));
+  private async subscribe(target: string, receiver: Receiver): Promise<void> {
+    const { pc } = receiver;
+    const signal = receiver.controller.signal;
+    try {
+      const result = await this.api.media<MediaResponse>(this.groupId, this.connectionId, "subscribe", {
+        target, call_id: this.callId,
+      }, signal);
+      signal.throwIfAborted();
+      if (!result.sessionDescription) throw new Error("No incoming audio offer was returned.");
+      await pc.setRemoteDescription(result.sessionDescription);
+      signal.throwIfAborted();
+      const answer = await pc.createAnswer();
+      signal.throwIfAborted();
+      await pc.setLocalDescription(answer);
+      await this.gather(pc, signal);
+      signal.throwIfAborted();
+      await this.api.media(this.groupId, this.connectionId, "answer", {
+        session_id: result.session_id, sdp: pc.localDescription?.sdp,
+      }, signal);
+      await this.connected(pc, signal);
+      signal.throwIfAborted();
+      const check = () => {
+        if (signal.aborted || !["failed", "disconnected"].includes(pc.connectionState)) return;
+        pc.onconnectionstatechange = null;
+        void this.receiverFailed(target, receiver, new Error("Incoming audio disconnected. Join again to retry."));
+      };
+      pc.onconnectionstatechange = check;
+      check();
+    } catch (error) {
+      await this.receiverFailed(target, receiver, error);
     }
   }
 
+  private async receiverFailed(target: string, receiver: Receiver, error: unknown): Promise<void> {
+    const signal = receiver.controller.signal;
+    if (signal.aborted || this.leaving) return;
+    try {
+      const latest = await this.api.callState(this.groupId, signal);
+      if (signal.aborted || this.leaving) return;
+      if (latest.call?.call_id === this.callId && latest.call.participants.includes(target)) {
+        this.failed(error);
+      } else {
+        // Keep the slot until the next snapshot so stale data cannot restart it.
+        this.closeReceiver(receiver);
+        this.updatePlayback();
+      }
+    } catch (stateError) {
+      if (!signal.aborted && !this.leaving) this.failed(stateError);
+    }
+  }
+
+  private updatePlayback(): void {
+    const receivers = [...this.receivers.values()];
+    this.update({ audioPlaying: receivers.some(receiver => receiver.playing),
+      playbackBlocked: receivers.some(receiver => receiver.blocked) });
+  }
+
+  private async playReceiver(receiver: Receiver): Promise<void> {
+    try {
+      await receiver.audio.play();
+      receiver.blocked = false;
+    } catch {
+      if (receiver.controller.signal.aborted || this.leaving) return;
+      receiver.blocked = true;
+    }
+    if (!receiver.controller.signal.aborted) this.updatePlayback();
+  }
+
   async resumePlayback(): Promise<void> {
-    try { await Promise.all([...this.receivers.values()].map(receiver => receiver.audio.play())); this.update({ playbackBlocked: false }); }
-    catch { this.update({ playbackBlocked: true }); }
+    await Promise.all([...this.receivers.values()]
+      .filter(receiver => receiver.audio.srcObject && !receiver.playing)
+      .map(receiver => this.playReceiver(receiver)));
   }
 
   private failed(error: unknown): void {
@@ -291,21 +387,28 @@ export class WalkieTalkieSession {
   }
 
   private closeReceiver(receiver: Receiver): void {
-    receiver.pc.ontrack = null; receiver.pc.onconnectionstatechange = null;
-    receiver.pc.close(); receiver.audio.pause(); receiver.audio.srcObject = null;
+    receiver.controller.abort();
+    receiver.playing = false;
+    receiver.blocked = false;
+    receiver.pc.ontrack = null;
+    receiver.pc.onconnectionstatechange = null;
+    receiver.audio.onplaying = null;
+    receiver.pc.close();
+    receiver.audio.pause();
+    receiver.audio.srcObject = null;
   }
 
   private closing?: Promise<void>;
   close(): Promise<void> {
     if (this.closing) return this.closing;
-    this.joined = false; this.ready = false; this.generation++;
+    this.joined = false; this.generation++;
     this.controller.abort();
     for (const action of this.actions.values()) { clearTimeout(action.timer); action.reject(new Error("Call closed.")); }
     this.actions.clear();
     if (this.publisher) { this.publisher.onconnectionstatechange = null; this.publisher.close(); this.publisher = undefined; }
     this.microphone?.getTracks().forEach(track => { track.onended = null; track.stop(); }); this.microphone = undefined;
     this.receivers.forEach(receiver => this.closeReceiver(receiver)); this.receivers.clear();
-    this.update({ inLiveCall: false, callId: undefined, muted: false });
+    this.update({ inLiveCall: false, callId: undefined, muted: false, audioPlaying: false, playbackBlocked: false });
     this.closing = new Promise<void>((resolve, reject) => {
       if (!this.unsubscribeWalkie || !liveSocket.isOpen) { this.unsubscribeWalkie?.(); resolve(); return; }
       const timer = setTimeout(() => { stop(); reject(new Error("Could not release the previous call. Reload this page before calling again.")); }, 12_000);

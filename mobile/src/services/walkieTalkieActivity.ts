@@ -1,5 +1,6 @@
 import { WalkieTalkieApi } from "../api/walkieTalkieApi";
 import { liveSocket } from "./liveSocket";
+import { sameFields, sameList } from "./walkieTalkieSnapshot";
 import type { WalkieGroupSummary, WalkieSnapshot } from "../types/walkieTalkie";
 
 /** Presence and invitations for all memberships, without capturing media. */
@@ -31,24 +32,39 @@ export class WalkieTalkieActivity {
     try {
       const response = await this.api.memberships(this.controller.signal);
       if (generation !== this.generation) return;
-      this.groups = response.groups;
+      const groups = response.groups.map(group => {
+        const previous = this.groups.find(item => item.id === group.id);
+        if (!previous) return group;
+        const members = group.members.map(member => {
+          const current = previous.members.find(item => item.device_id === member.device_id);
+          return current ? { ...member, online: current.online, audio_active: current.audio_active } : member;
+        });
+        const next = { ...group, members: sameList(previous.members, members, sameFields) ? previous.members : members };
+        return sameFields(previous, next) ? previous : next;
+      });
+      if (!sameList(this.groups, groups, Object.is)) this.groups = groups;
       this.changed(this.groups, response.device_id);
       const ids = new Set(this.groups.map(group => group.id));
       for (const [id, stop] of this.connections) if (!ids.has(id)) { stop(); this.connections.delete(id); }
-      for (const group of this.groups) {
-        if (this.connections.has(group.id)) continue;
-        this.connections.set(group.id, liveSocket.subscribeWalkie(group.id, true, data => {
+      for (const id of ids) {
+        if (this.connections.has(id)) continue;
+        this.connections.set(id, liveSocket.subscribeWalkie(id, true, data => {
           if (generation !== this.generation) return;
           if (data.type === "snapshot") {
             const snapshot = data as unknown as WalkieSnapshot;
-            const current = this.groups.find(item => item.id === group.id);
-            if (current) { current.members = snapshot.members; current.name = snapshot.group_name || current.name; }
-            this.changed([...this.groups], response.device_id);
-            this.snapshot(group.id, snapshot);
+            const current = this.groups.find(item => item.id === id);
+            if (!current) return;
+            const name = snapshot.group_name || current.name;
+            const members = sameList(current.members, snapshot.members, sameFields) ? current.members : snapshot.members;
+            if (name !== current.name || members !== current.members) {
+              this.groups = this.groups.map(group => group.id === id ? { ...group, name, members } : group);
+              this.changed(this.groups, response.device_id);
+            }
+            this.snapshot(id, snapshot);
           } else if (data.type === "ended") {
             // Membership/configuration invalidation may remove an observer.
             // Refresh membership, then establish a new observer if still allowed.
-            this.connections.get(group.id)?.(); this.connections.delete(group.id); void this.sync();
+            this.connections.get(id)?.(); this.connections.delete(id); void this.sync();
           } else if (data.type === "error") this.failed(String(data.message || "Caller is unavailable."));
         }));
       }

@@ -16,6 +16,7 @@ export interface WalkieState {
   peers: WalkiePeer[];
   members: WalkieMember[];
   playbackBlocked: boolean;
+  audioPlaying: boolean;
   inLiveCall?: boolean;
   callId?: string;
   muted: boolean;

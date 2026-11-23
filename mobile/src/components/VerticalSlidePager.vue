@@ -13,6 +13,7 @@ const props = withDefaults(
     modelValue: string;
     items: PagerItem[];
     enabled?: boolean;
+    skipTransition?: boolean;
     dotVariant?: "light" | "amber" | "theme";
   }>(),
   {
@@ -224,7 +225,7 @@ onBeforeUnmount(() => {
     @wheel="onWheel"
   >
     <div class="relative min-h-0 flex-1 w-full overflow-hidden">
-      <Transition :name="transitionName">
+      <Transition :name="transitionName" :css="!skipTransition">
         <div
           :key="modelValue"
           class="mo-pager-slide absolute inset-0 flex h-full w-full flex-col overflow-hidden will-change-transform"
