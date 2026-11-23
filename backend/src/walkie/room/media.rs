@@ -115,6 +115,163 @@ impl WalkieGroupObject {
         .await
     }
 
+    async fn retire_failed_session(
+        &self,
+        connection: &str,
+        session: String,
+        pending: bool,
+    ) -> AppResult<()> {
+        let coordinator = self.clone();
+        let connection = connection.to_string();
+        self.coordinate(async move {
+            let mut room = coordinator.load().await.map_err(db_error)?;
+            if let Some(client) = room.clients.get_mut(&connection) {
+                client.sessions.retain(|stored| stored.id != session);
+            }
+            if !pending && !room.cleanup.iter().any(|stored| stored.id == session) {
+                room.cleanup.push(MediaSession {
+                    id: session,
+                    pending: false,
+                    prepared: false,
+                    mids: Vec::new(),
+                    target: None,
+                    attempts: 0,
+                });
+            }
+            coordinator.save(&room).await.map_err(db_error)
+        })
+        .await
+    }
+
+    async fn open_media_session(
+        &self,
+        id: &str,
+        token: &str,
+        subscription: Option<(String, String)>,
+        prepared: bool,
+    ) -> AppResult<(String, Option<String>)> {
+        let reservation = random_id()?;
+        let reserved = reservation.clone();
+        let connection = id.to_string();
+        // Reserve under a short gate and release it before calling the provider.
+        let publisher = self
+            .update_media(id.into(), token.into(), false, move |room| {
+                let publisher = if let Some((target, call_id)) = &subscription {
+                    if target == &connection {
+                        return Err(AppError::bad_request("Cannot subscribe to yourself."));
+                    }
+                    if !room.call.as_ref().is_some_and(|call| {
+                        call.call_id == *call_id
+                            && call.participants.contains(&connection)
+                            && call.participants.contains(target)
+                    }) {
+                        return Err(AppError::forbidden(
+                            "Join this call before subscribing to audio.",
+                        ));
+                    }
+                    let session = room
+                        .clients
+                        .get(target)
+                        .filter(|client| client.published)
+                        .and_then(|client| {
+                            client
+                                .sessions
+                                .iter()
+                                .find(|s| s.target.is_none() && !s.mids.is_empty())
+                        })
+                        .ok_or_else(|| AppError::not_found("Participant audio is unavailable."))?;
+                    Some(session.id.clone())
+                } else {
+                    None
+                };
+                let target = subscription.map(|(target, _)| target);
+                let client = room
+                    .clients
+                    .get_mut(&connection)
+                    .ok_or_else(|| AppError::forbidden("Audio session ended."))?;
+                if client.sessions.len() >= 5 || client.sessions.iter().any(|s| s.target == target)
+                {
+                    return Err(AppError::new(
+                        "Audio session already exists. Reconnect audio.",
+                        409,
+                    ));
+                }
+                client.sessions.push(MediaSession {
+                    id: reserved,
+                    pending: true,
+                    prepared,
+                    mids: Vec::new(),
+                    target,
+                    attempts: 0,
+                });
+                Ok(publisher)
+            })
+            .await?;
+
+        let sfu = SfuService(&self.env);
+        let created = sfu
+            .request(Method::Post, "/sessions/new", None)
+            .await
+            .and_then(|value| {
+                value
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .ok_or_else(|| AppError::bad_gateway("Invalid audio session."))
+            });
+        let session = match created {
+            Ok(session) => session,
+            Err(error) => {
+                self.retire_failed_session(id, reservation, true).await?;
+                return Err(error);
+            }
+        };
+        let actual = session.clone();
+        let connection = id.to_string();
+        let recorded = self
+            .update_media(id.into(), token.into(), false, move |room| {
+                let reserved = room
+                    .clients
+                    .get_mut(&connection)
+                    .and_then(|client| client.sessions.iter_mut().find(|s| s.id == reservation))
+                    .ok_or_else(|| AppError::forbidden("Audio session ended."))?;
+                reserved.id = actual;
+                reserved.pending = false;
+                Ok(())
+            })
+            .await;
+        if let Err(error) = recorded {
+            // The participant may leave while the provider creates the session.
+            self.retire_failed_session(id, session, false).await?;
+            return Err(error);
+        }
+        Ok((session, publisher))
+    }
+
+    async fn claim_prepared_publisher(
+        &self,
+        id: &str,
+        token: &str,
+        session: &str,
+    ) -> AppResult<()> {
+        let connection = id.to_string();
+        let session = session.to_string();
+        self.update_media(id.into(), token.into(), false, move |room| {
+            let prepared =
+                room.clients
+                    .get_mut(&connection)
+                    .and_then(|client| {
+                        client.sessions.iter_mut().find(|s| {
+                            s.id == session && s.target.is_none() && s.prepared && !s.pending
+                        })
+                    })
+                    .ok_or_else(|| AppError::forbidden("Prepared audio session is unavailable."))?;
+            prepared.prepared = false;
+            Ok(())
+        })
+        .await
+    }
+
     pub(super) async fn media(&self, room: &mut Room, id: &str, data: &Value) -> AppResult<Value> {
         let sfu = SfuService(&self.env);
         let op = data.get("operation").and_then(Value::as_str).unwrap_or("");
@@ -127,6 +284,20 @@ impl WalkieGroupObject {
         if op == "ice" {
             return sfu.ice_servers().await.map(|v| json!({"ice_servers":v}));
         }
+        if op == "prepare" {
+            let (opened, ice) = futures_util::join!(
+                self.open_media_session(id, &token, None, true),
+                sfu.ice_servers(),
+            );
+            let (session, _) = opened?;
+            return match ice {
+                Ok(servers) => Ok(json!({"session_id":session,"ice_servers":servers})),
+                Err(error) => {
+                    self.retire_failed_session(id, session, false).await?;
+                    Err(error)
+                }
+            };
+        }
         if op == "ready" {
             let connection = id.to_string();
             return self
@@ -135,11 +306,7 @@ impl WalkieGroupObject {
                         .clients
                         .get_mut(&connection)
                         .ok_or_else(|| AppError::forbidden("Audio session ended."))?;
-                    if !client
-                        .sessions
-                        .iter()
-                        .any(|s| s.target.is_none() && !s.pending && !s.mids.is_empty())
-                    {
+                    if !client.has_publication() {
                         return Err(AppError::bad_request("Publish audio first."));
                     }
                     client.published = true;
@@ -174,18 +341,20 @@ impl WalkieGroupObject {
                 .await;
         }
         if op == "publish" || op == "subscribe" {
-            let requested_target = if op == "subscribe" {
-                Some(
-                    data.get("target")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| AppError::bad_request("Missing publication."))?
-                        .to_string(),
-                )
+            let subscription = if op == "subscribe" {
+                let target = data
+                    .get("target")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| AppError::bad_request("Missing publication."))?;
+                let call_id = data
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .or_else(|| room.call.as_ref().map(|call| call.call_id.as_str()))
+                    .ok_or_else(|| AppError::forbidden("This call has ended."))?;
+                Some((target.to_string(), call_id.to_string()))
             } else {
                 None
             };
-            let subscription_target = requested_target.clone();
-            let subscription_call = if requested_target.is_some() { room.call.as_ref().map(|c| c.call_id.clone()) } else { None };
             let local_offer = if op == "publish" {
                 let mid = data
                     .get("mid")
@@ -203,114 +372,23 @@ impl WalkieGroupObject {
             } else {
                 None
             };
-            let reservation = random_id()?;
-            let reserved = reservation.clone();
-            let connection = id.to_string();
-            // Reserve under a short gate; SFU requests must not block heartbeats.
-            let target = self
-                .update_media(id.into(), token.clone(), false, move |room| {
-                    let target = if let Some(target) = requested_target {
-                        if !room.call.as_ref().is_some_and(|call|
-                            call.participants.contains(&connection) && call.participants.contains(&target)) {
-                            return Err(AppError::forbidden("Join this call before subscribing to audio."));
-                        }
-                        if target == connection {
-                            return Err(AppError::bad_request("Cannot subscribe to yourself."));
-                        }
-                        let publisher = room
-                            .clients
-                            .get(&target)
-                            .filter(|c| c.published)
-                            .ok_or_else(|| AppError::not_found("Participant audio is unavailable."))?;
-                        let session = publisher
-                            .sessions
-                            .iter()
-                            .find(|s| s.target.is_none() && !s.pending)
-                            .ok_or_else(|| AppError::not_found("Audio is not ready."))?;
-                        Some((target, session.id.clone()))
-                    } else {
-                        None
-                    };
-                    let client = room
-                        .clients
-                        .get_mut(&connection)
-                        .ok_or_else(|| AppError::forbidden("Audio session ended."))?;
-                    if client.sessions.len() >= 5
-                        || client
-                            .sessions
-                            .iter()
-                            .any(|s| s.target.as_deref() == target.as_ref().map(|t| t.0.as_str()))
-                    {
-                        return Err(AppError::new(
-                            "Audio session already exists. Reconnect audio.",
-                            409,
-                        ));
-                    }
-                    client.sessions.push(MediaSession {
-                        id: reserved,
-                        pending: true,
-                        mids: Vec::new(),
-                        target: target.as_ref().map(|t| t.0.clone()),
-                        attempts: 0,
-                    });
-                    Ok(target)
-                })
-                .await?;
-            let created = match sfu.request(Method::Post, "/sessions/new", None).await {
-                Ok(created) => created,
-                Err(error) => {
-                    let connection = id.to_string();
-                    let _ = self
-                        .update_media(id.into(), token, false, move |room| {
-                            let client = room.clients.get_mut(&connection).ok_or_else(|| {
-                                AppError::forbidden("Audio session ended.")
-                            })?;
-                            client.sessions.retain(|s| s.id != reservation);
-                            Ok(())
-                        })
-                        .await;
-                    return Err(error);
-                }
-            };
-            let session = created
-                .get("sessionId")
-                .and_then(Value::as_str)
-                .ok_or_else(|| AppError::bad_gateway("Invalid audio session."))?
-                .to_string();
-            let actual = session.clone();
-            let connection = id.to_string();
-            let recorded = self.update_media(id.into(), token.clone(), false, move |room| {
-                let reserved = room
-                    .clients
-                    .get_mut(&connection)
-                    .ok_or_else(|| AppError::forbidden("Audio session ended."))?
-                    .sessions
-                    .iter_mut()
-                    .find(|s| s.id == reservation)
-                    .ok_or_else(|| AppError::forbidden("Audio session ended."))?;
-                reserved.id = actual;
-                reserved.pending = false;
-                Ok(())
-            })
-            .await;
-            if let Err(error) = recorded {
-                // The participant may leave while /sessions/new is in flight.
-                // The returned provider session still needs durable teardown.
-                let coordinator = self.clone();
-                let abandoned = MediaSession { id: session, pending: false, mids: Vec::new(), target: None, attempts: 0 };
-                self.coordinate(async move {
-                    let mut room = coordinator.load().await.map_err(db_error)?;
-                    room.cleanup.push(abandoned);
-                    coordinator.save(&room).await.map_err(db_error)
-                }).await?;
-                return Err(error);
-            }
-            let request = if let Some((_, publisher)) = target {
-                json!({"tracks":[{"location":"remote","sessionId":publisher,"trackName":"audio"}]})
-            } else if let Some(offer) = local_offer {
-                offer
+            let (session, request) = if let Some(offer) = local_offer {
+                let session = if let Some(prepared) = data.get("session_id").and_then(Value::as_str)
+                {
+                    self.claim_prepared_publisher(id, &token, prepared).await?;
+                    prepared.to_string()
+                } else {
+                    self.open_media_session(id, &token, None, false).await?.0
+                };
+                (session, offer)
             } else {
-                return Err(AppError::bad_request("Missing audio track."));
+                let (session, publisher) = self
+                    .open_media_session(id, &token, subscription.clone(), false)
+                    .await?;
+                (
+                    session,
+                    json!({"tracks":[{"location":"remote","sessionId":publisher,"trackName":"audio"}]}),
+                )
             };
             let mut result = match sfu
                 .request(
@@ -322,25 +400,7 @@ impl WalkieGroupObject {
             {
                 Ok(result) => result,
                 Err(error) => {
-                    // A failed provider response may still have created tracks after earlier teardown.
-                    let coordinator = self.clone();
-                    let abandoned = MediaSession {
-                        id: session,
-                        pending: false,
-                        mids: Vec::new(),
-                        target: None,
-                        attempts: 0,
-                    };
-                    let connection = id.to_string();
-                    self.coordinate(async move {
-                        let mut room = coordinator.load().await.map_err(db_error)?;
-                        if let Some(client) = room.clients.get_mut(&connection) {
-                            client.sessions.retain(|stored| stored.id != abandoned.id);
-                        }
-                        room.cleanup.push(abandoned);
-                        coordinator.save(&room).await.map_err(db_error)
-                    })
-                    .await?;
+                    self.retire_failed_session(id, session, false).await?;
                     return Err(error);
                 }
             };
@@ -352,13 +412,15 @@ impl WalkieGroupObject {
                 .filter_map(|t| t.get("mid").and_then(Value::as_str).map(str::to_string))
                 .collect();
             let actual = session.clone();
-            let committed_mids = mids.clone();
             let connection = id.to_string();
             let committed = self
                 .update_media(id.into(), token, false, move |room| {
-                    if let Some(target) = subscription_target {
-                        if !room.call.as_ref().is_some_and(|call| Some(&call.call_id) == subscription_call.as_ref()
-                            && call.participants.contains(&connection) && call.participants.contains(&target)) {
+                    if let Some((target, call_id)) = subscription {
+                        if !room.call.as_ref().is_some_and(|call| {
+                            call.call_id == call_id
+                                && call.participants.contains(&connection)
+                                && call.participants.contains(&target)
+                        }) {
                             return Err(AppError::forbidden("This call has ended."));
                         }
                     }
@@ -370,26 +432,13 @@ impl WalkieGroupObject {
                         .iter_mut()
                         .find(|s| s.id == actual)
                         .ok_or_else(|| AppError::forbidden("Audio session ended."))?;
-                    stored.mids = committed_mids;
+                    stored.mids = mids;
                     Ok(())
                 })
                 .await;
             if let Err(error) = committed {
-                // Invalidation can race provider negotiation. Queue the resulting tracks for closure.
-                let coordinator = self.clone();
-                let abandoned = MediaSession {
-                    id: session,
-                    pending: false,
-                    mids,
-                    target: None,
-                    attempts: 0,
-                };
-                self.coordinate(async move {
-                    let mut room = coordinator.load().await.map_err(db_error)?;
-                    room.cleanup.push(abandoned);
-                    coordinator.save(&room).await.map_err(db_error)
-                })
-                .await?;
+                // Tracks can be created after a departure already queued cleanup.
+                self.retire_failed_session(id, session, false).await?;
                 return Err(error);
             }
             result["session_id"] = json!(session);
@@ -401,11 +450,19 @@ impl WalkieGroupObject {
                 .clients
                 .get(id)
                 .ok_or_else(|| AppError::forbidden("Audio session ended."))?;
-            if !client
-                .sessions
-                .iter()
-                .any(|s| s.id == session && !s.pending)
-            {
+            if !client.sessions.iter().any(|s| {
+                s.id == session
+                    && !s.pending
+                    && !s.mids.is_empty()
+                    && s.target.as_ref().is_some_and(|target| {
+                        room.call.as_ref().is_some_and(|call| {
+                            call.participants
+                                .iter()
+                                .any(|participant| participant == id)
+                                && call.participants.contains(target)
+                        })
+                    })
+            }) {
                 return Err(AppError::forbidden(
                     "Session does not belong to this connection.",
                 ));

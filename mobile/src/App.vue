@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { Settings } from "@lucide/vue";
 import DashboardWidgetPanel from "./components/DashboardWidgetPanel.vue";
 import HorizontalSplitLayout from "./components/HorizontalSplitLayout.vue";
@@ -24,6 +24,7 @@ const userId = computed(() => isAuthenticated.value ? user.value?.id : undefined
 const availableWidgets = computed(() => resolveDashboardWidgets(widgets.value, userId.value === undefined ? null : user.value));
 const { layout, panels, layoutSaveFailed, moveWidget: saveWidgetMove, resetLayout: resetSavedLayout } = useWidgetLayout(userId, availableWidgets);
 const selected = reactive<Record<WidgetSide, WidgetKey | null>>({ left: null, right: null });
+const instantCallerSide = ref<WidgetSide>();
 
 const callerSide = computed(() => WIDGET_SIDES.find((side) => panels.value[side].some((widget) => widget.key === "walkie_talkie")));
 const callerGroup = computed(() => {
@@ -47,7 +48,11 @@ watch(panels, (next) => {
 });
 
 watch(caller.incomingSequence, () => {
-  if (callerSide.value) selected[callerSide.value] = "walkie_talkie";
+  const side = callerSide.value;
+  if (!side || selected[side] === "walkie_talkie") return;
+  instantCallerSide.value = side;
+  selected[side] = "walkie_talkie";
+  void nextTick(() => { instantCallerSide.value = undefined; });
 });
 
 onMounted(() => { startWidgetSync(); });
@@ -71,12 +76,12 @@ function resetLayout(): void {
   <div class="mo-app-root orientation-locked-container bg-background text-foreground relative">
     <HorizontalSplitLayout>
       <template #left>
-        <DashboardWidgetPanel v-if="isAuthenticated" :key="layout.left.join(',')" v-model="selected.left" :widgets="panels.left" />
+        <DashboardWidgetPanel v-if="isAuthenticated" :key="layout.left.join(',')" v-model="selected.left" :widgets="panels.left" :skip-transition="instantCallerSide === 'left'" />
         <DeviceLeftPanel v-else />
       </template>
 
       <template #right>
-        <DashboardWidgetPanel v-if="isAuthenticated" :key="layout.right.join(',')" v-model="selected.right" :widgets="panels.right" />
+        <DashboardWidgetPanel v-if="isAuthenticated" :key="layout.right.join(',')" v-model="selected.right" :widgets="panels.right" :skip-transition="instantCallerSide === 'right'" />
         <DevicePairingView
           v-else
           :auth-state="authState"

@@ -1,42 +1,69 @@
-/** Synthesizes a local alert; browser audio permission never controls invitations. */
+import ringtoneUrl from "../assets/universfield-ringtone-030-437513.mp3";
+
+/** Browser audio permission never controls invitations. */
 export class CallerRingtone {
   private context?: AudioContext;
-  private timer?: ReturnType<typeof setInterval>;
+  private buffer?: Promise<AudioBuffer>;
+  private source?: AudioBufferSourceNode;
   private ringing = false;
+  private waiting = false;
+  private generation = 0;
   private readonly blocked: (value: boolean) => void;
   constructor(blocked: (value: boolean) => void) { this.blocked = blocked; }
 
   async unlock(): Promise<void> {
     try {
       this.context ??= new AudioContext();
-      await this.context.resume();
+      const resume = this.context.resume();
       this.blocked(this.context.state !== "running");
-      if (this.ringing) this.tone();
+      await resume;
+      this.blocked(this.context.state !== "running");
+      if (this.ringing) void this.tone(this.generation);
     } catch { this.blocked(true); }
   }
 
   play(waiting: boolean): void {
-    this.stop(); this.ringing = true; this.tone();
-    if (!waiting) this.timer = setInterval(() => this.tone(), 3000);
+    this.stop();
+    this.ringing = true;
+    this.waiting = waiting;
+    void this.unlock();
   }
 
-  private tone(): void {
-    if (!this.context || this.context.state !== "running") { this.blocked(true); return; }
-    this.blocked(false);
-    const start = this.context.currentTime;
-    for (const offset of [0, 0.25]) {
-      const oscillator = this.context.createOscillator();
-      const volume = this.context.createGain();
-      oscillator.frequency.value = 660;
-      volume.gain.setValueAtTime(0, start + offset);
-      volume.gain.linearRampToValueAtTime(0.12, start + offset + 0.02);
-      volume.gain.linearRampToValueAtTime(0, start + offset + 0.2);
-      oscillator.connect(volume); volume.connect(this.context.destination);
-      oscillator.start(start + offset); oscillator.stop(start + offset + 0.22);
-      oscillator.onended = () => { oscillator.disconnect(); volume.disconnect(); };
+  private async tone(generation: number): Promise<void> {
+    const context = this.context;
+    if (!context || context.state !== "running") { this.blocked(true); return; }
+    try {
+      this.buffer ??= fetch(ringtoneUrl).then(response => {
+        if (!response.ok) throw new Error("Could not load ringtone");
+        return response.arrayBuffer();
+      }).then(data => context.decodeAudioData(data)).catch(error => {
+        this.buffer = undefined;
+        throw error;
+      });
+      const buffer = await this.buffer;
+      if (!this.ringing || generation !== this.generation || this.source) return;
+      const source = context.createBufferSource();
+      source.buffer = buffer;
+      source.loop = !this.waiting;
+      source.connect(context.destination);
+      source.onended = () => {
+        source.disconnect();
+        if (this.source === source) this.source = undefined;
+      };
+      this.source = source;
+      source.start();
+      this.blocked(false);
+    } catch {
+      if (this.ringing && generation === this.generation) this.blocked(true);
     }
   }
 
-  stop(): void { this.ringing = false; clearInterval(this.timer); }
+  stop(): void {
+    this.ringing = false;
+    this.generation++;
+    this.source?.stop();
+    this.source = undefined;
+  }
+
   dispose(): void { this.stop(); void this.context?.close(); }
 }

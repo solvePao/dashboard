@@ -4,7 +4,7 @@ import type { WidgetKey } from "../types/layout";
 import type { DashboardWidget } from "../widgets/registry";
 import VerticalSlidePager from "./VerticalSlidePager.vue";
 
-const props = defineProps<{ widgets: DashboardWidget[] }>();
+const props = defineProps<{ widgets: DashboardWidget[]; skipTransition?: boolean }>();
 const selected = defineModel<WidgetKey | null>({ required: true });
 
 const activeWidget = computed(() =>
@@ -32,6 +32,7 @@ function handleStockViewMode(mode: "grid" | "detail"): void {
     v-model="activeKey"
     :items="widgets"
     :enabled="!isStockInspected"
+    :skip-transition="skipTransition"
     :dot-variant="activeWidget.dotVariant ?? 'theme'"
   >
     <component :is="activeWidget.component" v-bind="activeWidget.props" @view-mode-change="handleStockViewMode" />

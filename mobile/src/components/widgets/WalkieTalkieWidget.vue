@@ -1,27 +1,39 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, defineAsyncComponent, ref, watchPostEffect } from "vue";
 import { Phone, PhoneOff, Mic, MicOff, KeyRound, Volume2, Users } from "@lucide/vue";
 import { DialogRoot, DialogPortal, DialogOverlay, DialogContent, DialogTitle, DialogDescription, DialogClose } from "reka-ui";
 import { useCaller } from "../../composables/useWalkieTalkie";
 import WalkieAvatarCluster from "./WalkieAvatarCluster.vue";
 import WalkieParticipantAvatar from "./WalkieParticipantAvatar.vue";
-import WalkieDeviceCodePanel from "./WalkieDeviceCodePanel.vue";
 import CallerInvitations from "./CallerInvitations.vue";
 import CallerFeaturedInvitation from "./CallerFeaturedInvitation.vue";
 
 defineProps<{ config: Record<string, unknown> }>();
+const WalkieDeviceCodePanel = defineAsyncComponent(() => import("./WalkieDeviceCodePanel.vue"));
 const { state, groups, currentGroup, currentGroupId, participants, currentCall, invitations, activityError, switching,
-  busyElsewhere, ringBlocked, previousCall, pendingCalls, waitingModalOpen, inLiveCall, canEndForEveryone, connect, switchGroup, leave, toggleMute, enableSound, rejoinPrevious } = useCaller();
+  busyElsewhere, ringBlocked, previousCall, pendingCalls, waitingModalOpen, inLiveCall, canEndForEveryone,
+  connect, switchGroup, leave, markInvitationVisible, toggleMute, enableSound, rejoinPrevious } = useCaller();
 const codeSheetOpen = ref(false);
+const codeSheetRequested = ref(false);
 const confirmEndOpen = ref(false);
-const ringingCalls = computed(() => invitations.value.filter(call => call.ringing));
+const ringingCalls = pendingCalls;
 const featuredCall = computed(() => !inLiveCall.value ? ringingCalls.value[0] : undefined);
 const ongoingCalls = computed(() => invitations.value.filter(call => !call.ringing));
+const pickedUp = computed(() => currentCall.value?.established || state.value.status === "talking");
 const callStatus = computed(() => {
   if (switching.value || state.value.status === "connecting") return "Connecting call…";
   if (state.value.status === "reconnecting") return "Reconnecting…";
-  return currentCall.value?.established ? "In call" : "Calling group…";
+  if (!pickedUp.value) return "Calling group…";
+  if (state.value.playbackBlocked) return "Call audio blocked";
+  return state.value.audioPlaying ? "In call" : "Connecting audio…";
 });
+watchPostEffect(() => {
+  for (const call of ringingCalls.value) markInvitationVisible(call);
+});
+function openCodeSheet(): void {
+  codeSheetRequested.value = true;
+  codeSheetOpen.value = true;
+}
 function endForEveryone(): void {
   confirmEndOpen.value = false;
   void leave(true);
@@ -35,7 +47,7 @@ function endForEveryone(): void {
         <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary"><Phone class="h-4 w-4" /></span>
         <div class="min-w-0"><p class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Caller</p><h2 class="truncate text-sm font-semibold">{{ currentGroup?.name || 'Group calls' }}</h2></div>
       </div>
-      <button type="button" class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-border transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Add this device to a group" @click="codeSheetOpen = true"><KeyRound class="h-4 w-4" /></button>
+      <button type="button" class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-border transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Add this device to a group" @click="openCodeSheet"><KeyRound class="h-4 w-4" /></button>
     </header>
 
     <div
@@ -59,7 +71,7 @@ function endForEveryone(): void {
                 </div>
               </div>
               <div v-else class="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10 text-primary"><Users class="h-7 w-7" /></div>
-              <p class="text-xs text-muted-foreground">{{ !currentCall?.established ? 'Waiting for someone to pick up' : state.muted ? 'Your microphone is muted' : 'Your microphone is on' }}</p>
+              <p class="text-xs text-muted-foreground">{{ !pickedUp ? 'Waiting for someone to pick up' : state.muted ? 'Your microphone is muted' : 'Your microphone is on' }}</p>
             </div>
           </template>
           <template v-else>
@@ -82,7 +94,7 @@ function endForEveryone(): void {
               <div v-else-if="!groups.length" class="caller-summary flex flex-1 flex-col items-center justify-center gap-2 py-4 text-center">
                 <span class="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10 text-primary"><Users class="h-7 w-7" /></span>
                 <p class="text-base font-semibold">Join a group to call</p><p class="text-xs text-muted-foreground">Share your device code with a group owner.</p>
-                <button type="button" class="mt-2 min-h-11 rounded-full bg-primary px-5 text-xs font-semibold text-primary-foreground" @click="codeSheetOpen = true">Get device code</button>
+                <button type="button" class="mt-2 min-h-11 rounded-full bg-primary px-5 text-xs font-semibold text-primary-foreground" @click="openCodeSheet">Get device code</button>
               </div>
             </template>
             <div v-if="ongoingCalls.length" class="space-y-2"><p class="text-xs font-semibold text-muted-foreground">Calls in progress</p><CallerInvitations :calls="ongoingCalls" /></div>
@@ -106,7 +118,7 @@ function endForEveryone(): void {
         <CallerFeaturedInvitation v-else-if="featuredCall" :call="featuredCall" actions />
       </div>
     </div>
-    <WalkieDeviceCodePanel :open="codeSheetOpen" :unassigned="!groups.length" @close="codeSheetOpen = false" />
+    <WalkieDeviceCodePanel v-if="codeSheetRequested" :open="codeSheetOpen" :unassigned="!groups.length" @close="codeSheetOpen = false" />
     <DialogRoot v-if="inLiveCall" v-model:open="confirmEndOpen">
       <DialogPortal to=".caller-widget-root">
         <DialogOverlay class="absolute inset-0 z-50 bg-black/60" @touchstart.stop @touchend.stop @wheel.stop />

@@ -29,7 +29,7 @@ class LiveSocketClient {
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private heartbeat?: ReturnType<typeof setInterval>;
   private attempts = 0;
-  private openWaiters: Array<() => void> = [];
+  private openWaiters = new Set<() => void>();
 
   connect(url: string): void {
     if (this.url === url && this.ws && this.ws.readyState <= WebSocket.OPEN) return;
@@ -72,9 +72,7 @@ class LiveSocketClient {
         this.sendRaw({ channel: "walkie", type: "subscribe", group_id: sub.groupId, observe: sub.observe, protocol_version: 2 });
       }
       if (this.url.includes("/live/pairing/")) this.sendRaw({ channel: "pairing", type: "status" });
-      const waiters = this.openWaiters;
-      this.openWaiters = [];
-      waiters.forEach((resolve) => resolve());
+      this.openWaiters.forEach((resolve) => resolve());
     };
     ws.onmessage = (event) => {
       let data: LiveEnvelope;
@@ -106,9 +104,23 @@ class LiveSocketClient {
     ws.onerror = () => ws.close();
   }
 
-  whenOpen(): Promise<void> {
+  whenOpen(signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return Promise.reject(signal.reason);
     if (this.ws?.readyState === WebSocket.OPEN) return Promise.resolve();
-    return new Promise((resolve) => this.openWaiters.push(resolve));
+    return new Promise((resolve, reject) => {
+      const finish = (error?: unknown) => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", abort);
+        this.openWaiters.delete(open);
+        if (error) reject(error);
+        else resolve();
+      };
+      const open = () => finish();
+      const abort = () => finish(signal.reason);
+      const timer = setTimeout(() => finish(new Error("Dashboard connection is unavailable.")), 10_000);
+      this.openWaiters.add(open);
+      signal.addEventListener("abort", abort, { once: true });
+    });
   }
 
   subscribe(channel: string, handler: Handler, groupId?: string): () => void {
